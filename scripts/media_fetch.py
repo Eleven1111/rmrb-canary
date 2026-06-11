@@ -1,7 +1,7 @@
 """
 media_fetch.py — 多源媒体数据采集脚本（rmrb-canary 交叉验证层）
 在 rmrb_fetch.py 基础上新增：
-  - 百度新闻：按关键词搜索近 N 天报道（聚合新华社/央视/人民网等官媒），判断央媒联动程度
+  - 人民网多频道 RSS：按关键词过滤官媒报道，判断官媒联动程度
   - 微博热搜：抓取当前热搜榜，判断议题是否进入民间舆论圈
   - 输出 cross_validation.json，直接对应 skill 交叉验证步骤
 
@@ -237,7 +237,7 @@ def build_cross_validation(rmrb_summary, official_articles, weibo_data, keywords
     将三个来源的数据整合为交叉验证报告。
     直接对应 skill 中"第七节 交叉验证信号"的输入。
 
-    official_articles: 来自 fetch_official_media()，百度新闻聚合官媒报道
+    official_articles: 来自 fetch_official_media()，人民网多频道 RSS 官媒报道
     """
     rmrb_count = rmrb_summary.get('total_articles', 0)
 
@@ -276,9 +276,9 @@ def build_cross_validation(rmrb_summary, official_articles, weibo_data, keywords
             'high_priority':  rmrb_summary.get('step1_agenda', {}).get('high_priority_articles', []),
         },
 
-        # 官媒聚合（百度新闻，含新华社/央视/人民网等）
+        # 官媒聚合（人民网多频道 RSS）
         'official_media': {
-            'source_note':    '百度新闻聚合（含新华社、央视、人民网、光明网等官方来源）',
+            'source_note':    '人民网多频道 RSS（政治/财经/科技/社会/环境）',
             'total_count':    len(official_articles),
             'official_count': official_count,   # 可识别官方来源的数量
             'coverage_level': official_coverage,
@@ -328,7 +328,7 @@ def main():
     parser.add_argument('--sources', nargs='+',
                         default=['rmrb', 'official', 'weibo'],
                         choices=['rmrb', 'official', 'weibo'],
-                        help='数据来源，默认全部（official=百度新闻聚合官媒）')
+                        help='数据来源，默认全部（official=人民网RSS官媒聚合）')
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
@@ -344,10 +344,10 @@ def main():
             output_dir=os.path.join(args.output, 'rmrb')
         )
 
-    # ── 官媒聚合（百度新闻）───────────────────
+    # ── 官媒聚合（人民网RSS）──────────────────
     official_articles = []
     if 'official' in args.sources:
-        print(f'\n[2/3] 官媒聚合·百度新闻（近 {args.days} 天）...', file=sys.stderr)
+        print(f'\n[2/3] 官媒聚合·人民网RSS（近 {args.days} 天）...', file=sys.stderr)
         official_articles = fetch_official_media(args.keywords, days=args.days)
         with open(os.path.join(args.output, 'official_media.json'), 'w', encoding='utf-8') as f:
             json.dump(official_articles, f, ensure_ascii=False, indent=2)
