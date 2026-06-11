@@ -150,8 +150,9 @@ def rolling_trend(keywords: list[str], windows: list[int] = None) -> dict:
 
     # 获取所有历史分析
     rows = conn.execute(
-        """SELECT date, primary_frame, max_intensity, total_articles,
-                  risk_signal, ministry_level
+        """SELECT date, primary_frame,
+                  COALESCE(weighted_max_intensity, max_intensity) AS max_intensity,
+                  total_articles, risk_signal, ministry_level
            FROM analyses
            WHERE keywords = ?
            ORDER BY date DESC LIMIT 90""",
@@ -163,8 +164,9 @@ def rolling_trend(keywords: list[str], windows: list[int] = None) -> dict:
         like_conditions = ' AND '.join('keywords LIKE ?' for _ in keywords)
         like_params = [f'%{kw}%' for kw in keywords]
         rows = conn.execute(
-            f"""SELECT date, primary_frame, max_intensity, total_articles,
-                       risk_signal, ministry_level
+            f"""SELECT date, primary_frame,
+                       COALESCE(weighted_max_intensity, max_intensity) AS max_intensity,
+                       total_articles, risk_signal, ministry_level
                 FROM analyses
                 WHERE {like_conditions}
                 ORDER BY date DESC LIMIT 90""",
