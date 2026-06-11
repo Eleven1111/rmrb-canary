@@ -15,7 +15,7 @@ from agent.sources.gov_policy import search_policy_library
 from agent.sources.theory_channel import fetch_theory_articles
 
 
-def collect_upstream(keywords: list[str], days: int = 180) -> dict:
+def collect_upstream(keywords: list[str], days: int = 365) -> dict:
     """
     采集全部上游信号源。
 
