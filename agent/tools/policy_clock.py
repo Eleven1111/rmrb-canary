@@ -1,10 +1,22 @@
 """
-Tool: 政策时钟校正（纯代码）
+Tool: 政策时钟校正 + 风险窗口计算（纯代码）
 
 同一信号在不同年度节律阶段，实际行动时差不同。
+
+v3: 基础窗口优先采用历史案例回测校准值（agent/calibration），
+    校准失败或样本不足时回退默认值并标注；窗口输出附频率陈述
+    （历史同组合案例中 X 个月内行动的比例），替代伪精确点估计。
 """
 
 import datetime
+import sys
+
+try:
+    from agent.calibration.backtest import get_calibrated_windows, frequency_statement
+    _CALIBRATION_AVAILABLE = True
+except Exception as e:
+    print(f'[policy_clock] 校准模块不可用，使用默认窗口: {e}', file=sys.stderr)
+    _CALIBRATION_AVAILABLE = False
 
 CLOCK_PHASES = {
     (1, 2): {
@@ -79,28 +91,60 @@ def get_policy_clock(date_str: str | None = None) -> dict:
     return {'phase': '未知', 'coefficient': 1.0, 'note': '', 'month': month}
 
 
+def _resolve_base_window(intensity_level: int) -> tuple:
+    """
+    基础窗口：优先用案例回测校准的 p25-p75 区间，
+    样本不足的等级回退默认值。
+
+    返回 (low, high, basis_dict)。
+    """
+    default = BASE_WINDOWS.get(intensity_level, (12, 18))
+    if not _CALIBRATION_AVAILABLE:
+        return default[0], default[1], {'source': 'default', 'note': '校准模块不可用'}
+
+    calibrated = get_calibrated_windows().get(intensity_level)
+    if calibrated and calibrated['calibrated']:
+        lo, hi = calibrated['window']
+        return lo, hi, {
+            'source': 'backtest',
+            'n': calibrated['n'],
+            'observed_days': calibrated['observed_days'],
+            'note': f"基于 {calibrated['n']} 个历史案例的 p25-p75 提前量",
+        }
+    n = calibrated['n'] if calibrated else 0
+    return default[0], default[1], {
+        'source': 'default',
+        'n': n,
+        'note': f'该等级历史观测仅 {n} 例，样本不足，使用未校准默认窗口',
+    }
+
+
 def calculate_risk_window(
     intensity_level: int,
     ministry_compression: float,
     clock_coefficient: float,
     narrative_speed_modifier: float,
+    ministry_level: str = None,
 ) -> dict:
     """
     综合计算风险预测窗口。
 
-    窗口 = 基础窗口 × 部委压缩 × 时钟系数 × 叙事框架速度调整
+    窗口 = 基础窗口（回测校准优先）× 部委压缩 × 时钟系数 × 叙事框架速度调整
 
     返回：
       {
         base_window: str,
+        base_window_basis: {source, n, note},
         adjusted_window_months: (float, float),
         adjusted_window_label: str,
         risk_level: str,
         risk_emoji: str,
+        frequency: {statement, matched_cases, ...},
         factors: {部委压缩, 时钟系数, 叙事框架调整},
       }
     """
-    base = BASE_WINDOWS.get(intensity_level, (12, 18))
+    base_lo, base_hi, basis = _resolve_base_window(intensity_level)
+    base = (base_lo, base_hi)
     low = base[0] * ministry_compression * clock_coefficient * narrative_speed_modifier
     high = base[1] * ministry_compression * clock_coefficient * narrative_speed_modifier
     low = max(0, round(low, 1))
@@ -121,12 +165,21 @@ def calculate_risk_window(
     else:
         window_label = f'{low}-{high}个月'
 
+    freq = None
+    if _CALIBRATION_AVAILABLE and intensity_level >= 4:
+        try:
+            freq = frequency_statement(intensity_level, ministry_level)
+        except Exception as e:
+            print(f'[policy_clock] 频率陈述生成失败: {e}', file=sys.stderr)
+
     return {
         'base_window': f'{base[0]}-{base[1]}个月',
+        'base_window_basis': basis,
         'adjusted_window_months': (low, high),
         'adjusted_window_label': window_label,
         'risk_level': risk_level,
         'risk_emoji': emoji,
+        'frequency': freq,
         'factors': {
             'ministry_compression': ministry_compression,
             'clock_coefficient': clock_coefficient,
