@@ -48,7 +48,7 @@ description: |
 
 **一键启动（推荐）：**
 ```bash
-cd /Users/na/.claude/skills/rmrb-canary
+cd ~/.claude/skills/rmrb-canary   # 或本仓库根目录
 python3 -m agent.agent --keyword 光伏 新能源 储能
 ```
 
