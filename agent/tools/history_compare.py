@@ -6,14 +6,15 @@ Tool: 历史对比
 from agent.store.db import compare_with_previous, get_previous_analysis, list_analyses
 
 
-def compare_history(current_summary: dict, keywords: list[str]) -> dict:
+def compare_history(current_result: dict, keywords: list[str]) -> dict:
     """
-    对比当前分析结果与最近一次同议题历史分析。
+    对比当前管道结果与最近一次同议题历史分析（统一加权口径）。
 
-    返回趋势变化 dict，或 None（无历史数据时）。
+    current_result 需含 rmrb / narrative / intensity / ministry 字段。
+    返回趋势变化 dict；无历史数据时 has_baseline=False。
     趋势包含：话语强度变化、叙事框架漂移、部委协同升级、综合趋势警告。
     """
-    result = compare_with_previous(current_summary, keywords)
+    result = compare_with_previous(current_result, keywords)
     if result is None:
         return {
             'has_baseline': False,

@@ -29,18 +29,30 @@ NEGATIVE_ANCHORS = [
 
 
 def _split_paragraphs(text: str) -> list[str]:
-    """将文本按段落分割（以换行或句号分隔的段落）。"""
-    paragraphs = re.split(r'\n{2,}|\r\n{2,}', text)
-    # 过短段落合并到上一段
+    """
+    将文本按段落分割。
+
+    rmrb_fetch 用单个 \\n 连接段落，因此必须按单换行切分——
+    旧版按 \\n{2,} 切分导致整篇文章被当作一个段落，共现窗口失效。
+    """
+    paragraphs = re.split(r'\r?\n+', text)
+    # 小标题等短片段（<15字）属于其后内容，前置拼入下一段
     result = []
+    pending = ''
     for p in paragraphs:
         p = p.strip()
         if not p:
             continue
-        if result and len(p) < 30:
-            result[-1] += p
+        if len(p) < 15:
+            pending += p
+            continue
+        result.append(pending + p)
+        pending = ''
+    if pending:
+        if result:
+            result[-1] += pending
         else:
-            result.append(p)
+            result.append(pending)
     return result if result else [text]
 
 

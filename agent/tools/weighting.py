@@ -2,12 +2,16 @@
 Tool: 位置加权计算（纯代码）
 
 统一权重函数，供 narrative_frame / discourse_level / ministry_signals 调用。
-基于版面位置、栏目类型、标题命中三个维度，将信号强度从等权提升为加权。
+基于版面位置、栏目类型、标题命中、文章相关性四个维度加权。
 
 设计原则：
   头版社论的一个关键词 ≈ 第8版普通文章的12倍信号量。
   标题中出现的关键词 ≈ 正文中的3倍信号量。
+  顺带一提的文章（低相关性）信号按 relevance_multiplier 折减。
+  话语强度短语经语境过滤（否定/回顾语境不计入）。
 """
+
+from agent.tools.context_filter import has_valid_occurrence
 
 # ── 版面权重 ─────────────────────────────────────────────
 # page_no → weight
@@ -49,17 +53,20 @@ def get_column_weight(column: str) -> float:
 
 def get_article_weight(article: dict) -> float:
     """
-    综合文章权重 = 版面权重 × 栏目权重。
+    综合文章权重 = 版面权重 × 栏目权重 × 相关性乘数。
 
     参数：
-      article: 需含 page_no (int) 和 column (str)
+      article: 需含 page_no (int) 和 column (str)；
+               可选 relevance_multiplier (float, 由 relevance.annotate_relevance 写入，
+               缺省 1.0 保持向后兼容)
 
     返回：
-      综合权重倍数（基线 1.0 = 5版以后普通栏目）
+      综合权重倍数（基线 1.0 = 5版以后普通栏目、满相关）
     """
     page_w = get_page_weight(article.get('page_no', 99))
     col_w = get_column_weight(article.get('column', ''))
-    return page_w * col_w
+    rel_m = article.get('relevance_multiplier', 1.0)
+    return page_w * col_w * rel_m
 
 
 def weighted_keyword_count(article: dict, keywords: list[str]) -> float:
@@ -88,6 +95,8 @@ def weighted_phrase_count(article: dict, phrases: list[str]) -> tuple[float, lis
 
     返回 (加权得分, 命中短语列表)。
     标题命中 3x，正文命中 1x，再乘文章权重。
+    否定语境（"防止专项整治一刀切"）和回顾语境（"当年扫黑除恶"）
+    的命中经 context_filter 剔除，不计入信号。
     """
     title = article.get('title', '')
     content = article.get('content', '')
@@ -96,10 +105,10 @@ def weighted_phrase_count(article: dict, phrases: list[str]) -> tuple[float, lis
     score = 0.0
     matched = []
     for phrase in phrases:
-        if phrase in title:
+        if phrase in title and has_valid_occurrence(title, phrase):
             score += TITLE_WEIGHT * article_w
             matched.append(phrase)
-        elif phrase in content:
+        elif phrase in content and has_valid_occurrence(content, phrase):
             score += BODY_WEIGHT * article_w
             matched.append(phrase)
 

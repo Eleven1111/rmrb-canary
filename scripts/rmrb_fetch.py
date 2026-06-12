@@ -253,12 +253,11 @@ def fetch(date_str=None, keywords=None, output_dir='./rmrb_data'):
 
 def build_summary(date_label, articles, keywords):
     """
-    构建直接喂入 rmrb-canary 分析主流程的评分摘要。
+    构建采集摘要：议程优先度 + 地域映射 + 原文。
 
-    新增维度（2026版）：
-      - step0_narrative:   叙事框架识别（零步）
-      - step6_intensity:   话语强度七级定级（替代情感四象限）
-      - ministry_signals:  部委协同度检测
+    叙事框架/话语强度/部委协同的打分统一由 agent/tools/ 下的
+    加权版模块完成——本函数不再内嵌未加权的旧版打分逻辑，
+    避免双轨实现导致历史库与报告口径不一致。
     """
     # ── 地域提及 ──────────────────────────────────────────────────
     province_pattern = re.compile(
@@ -281,132 +280,11 @@ def build_summary(date_label, articles, keywords):
         for a in articles if a['column_score'] >= 2
     ]
 
-    # ── 第零步：叙事框架识别 ──────────────────────────────────────
-    NARRATIVE_FRAMES = {
-        '国家安全框架': ['安全', '自主可控', '卡脖子', '供应链安全', '数据安全', '网络安全', '粮食安全', '能源安全'],
-        '共同富裕框架': ['共同富裕', '资本无序', '垄断', '平台经济', '过度逐利', '防止资本'],
-        '高质量发展框架': ['高质量发展', '绿色低碳', '转型升级', '新质生产力', '淘汰落后'],
-        '自立自强框架': ['自立自强', '核心技术', '国产替代', '弯道超车', '科技创新', '关键核心'],
-        '防范金融风险框架': ['系统性风险', '杠杆', '债务风险', '流动性', '房住不炒', '防范化解'],
-        '社会治理框架': ['基层治理', '社会稳定', '民生保障', '群众利益', '维护稳定'],
-    }
-    full_corpus = ' '.join(
-        a['title'] + ' ' + a['content'] for a in articles
-    )
-    frame_hits = {}
-    for frame, keywords_f in NARRATIVE_FRAMES.items():
-        hit_words = [kw for kw in keywords_f if kw in full_corpus]
-        if hit_words:
-            frame_hits[frame] = {'count': len(hit_words), 'matched': hit_words}
-    # 按命中词数降序，取前两个主要框架
-    sorted_frames = sorted(frame_hits.items(), key=lambda x: -x[1]['count'])
-    primary_frame = sorted_frames[0][0] if sorted_frames else '未识别'
-    secondary_frame = sorted_frames[1][0] if len(sorted_frames) > 1 else None
-
-    # ── Step 6：话语强度七级定级 ─────────────────────────────────
-    INTENSITY_LEVELS = {
-        7: ['雷霆行动', '清网行动', '扫黑除恶', '集中收网', '专项打击'],
-        6: ['依法查处', '追究责任', '司法追诉', '移送公安', '依法追责', '绝不姑息'],
-        5: ['坚决遏制', '严格管控', '决不允许', '进一步规范', '坚决整治', '严厉打击'],
-        4: ['专项整治', '集中清理', '有序规范', '重点整治', '严格执法'],
-        3: ['规范发展', '健全机制', '完善监管', '规范引导', '加强监管'],
-        2: ['加快推进', '大力支持', '全面部署', '积极推进', '重点推进'],
-        1: ['研究制定', '鼓励试点', '积极探索', '研究探索', '鼓励发展'],
-    }
-    level_counts = {i: 0 for i in range(1, 8)}
-    level_triggers = {i: [] for i in range(1, 8)}
-    for a in articles:
-        text = a['title'] + ' ' + a['content']
-        for level, phrases in INTENSITY_LEVELS.items():
-            for phrase in phrases:
-                if phrase in text:
-                    level_counts[level] += 1
-                    if phrase not in level_triggers[level]:
-                        level_triggers[level].append(phrase)
-    max_level = max((lvl for lvl, cnt in level_counts.items() if cnt > 0), default=1)
-    total_hits = sum(level_counts.values()) or 1
-    level_distribution = {
-        f'level_{i}': {
-            'count': level_counts[i],
-            'pct': round(level_counts[i] / total_hits * 100, 1),
-            'triggers': level_triggers[i],
-        }
-        for i in range(1, 8)
-    }
-    # 跳级检测：最低非零等级 vs 最高等级，间隔≥2为跳级
-    nonzero_levels = sorted([lvl for lvl, cnt in level_counts.items() if cnt > 0])
-    jump_alert = False
-    jump_detail = None
-    if len(nonzero_levels) >= 2:
-        low, high = nonzero_levels[0], nonzero_levels[-1]
-        if high - low >= 3:  # 跨越≥2个空白等级
-            jump_alert = True
-            jump_detail = f'从{low}级跳至{high}级（中间等级无报道）'
-
-    # ── 部委协同度检测 ───────────────────────────────────────────
-    MINISTRY_PATTERNS = {
-        '国家发展改革委': ['发改委', '国家发展改革委', '发展改革'],
-        '工业和信息化部': ['工信部', '工业和信息化部'],
-        '国务院': ['国务院常务会议', '国务院专题', '国务院部署'],
-        '中央政治局': ['政治局会议', '政治局常委', '中央政治局'],
-        '国家市场监督管理总局': ['市场监管总局', '市场监管', '反垄断'],
-        '国家互联网信息办公室': ['网信办', '网络安全和信息化'],
-        '公安部': ['公安部', '公安机关', '警方'],
-        '最高人民检察院': ['最高检', '检察院', '检察机关'],
-        '最高人民法院': ['最高法', '人民法院'],
-        '财政部': ['财政部', '财政政策'],
-        '中国人民银行': ['人民银行', '央行', '货币政策'],
-        '国家税务总局': ['税务总局', '税务机关'],
-        '生态环境部': ['生态环境部', '环保部门'],
-        '教育部': ['教育部', '教育主管'],
-        '国家能源局': ['国家能源局', '能源监管'],
-    }
-    ministry_hits = {}
-    for ministry, patterns in MINISTRY_PATTERNS.items():
-        for a in articles:
-            text = a['title'] + ' ' + a['content']
-            for pat in patterns:
-                if pat in text:
-                    ministry_hits[ministry] = ministry_hits.get(ministry, 0) + 1
-                    break
-
-    ministry_count = len(ministry_hits)
-    has_state_council = '国务院' in ministry_hits
-    has_politburo = '中央政治局' in ministry_hits
-    has_judicial = any(m in ministry_hits for m in ['公安部', '最高人民检察院', '最高人民法院'])
-
-    if has_judicial:
-        coordination_level = 'L5'
-        coordination_label = '司法入轨，窗口≤30天'
-    elif has_politburo:
-        coordination_level = 'L4'
-        coordination_label = '政治局级，最高优先级'
-    elif has_state_council:
-        coordination_level = 'L3'
-        coordination_label = '国务院级，执行意志确认'
-    elif ministry_count >= 3:
-        coordination_level = 'L2'
-        coordination_label = '多部委协同，行动概率显著提升'
-    elif ministry_count >= 1:
-        coordination_level = 'L1'
-        coordination_label = '单部委关注，预警信号'
-    else:
-        coordination_level = 'L0'
-        coordination_label = '未检测到部委信号'
-
     return {
         'date': date_label,
         'keywords_filter': keywords or [],
         'total_articles': len(articles),
         'total_pages': max((a['page_no'] for a in articles), default=0),
-
-        # 第零步：叙事框架
-        'step0_narrative': {
-            'primary_frame': primary_frame,
-            'secondary_frame': secondary_frame,
-            'frame_hits': {k: v for k, v in sorted_frames},
-            'note': '框架识别基于关键词匹配，需结合上下文判断',
-        },
 
         # Step 1：议程优先度
         'step1_agenda': {
@@ -420,34 +298,13 @@ def build_summary(date_label, articles, keywords):
             'top_regions': [{'region': r, 'count': c} for r, c in top_regions],
         },
 
-        # Step 6：话语强度七级
-        'step6_intensity': {
-            'max_level': max_level,
-            'max_level_triggers': level_triggers[max_level],
-            'distribution': level_distribution,
-            'jump_alert': jump_alert,
-            'jump_detail': jump_detail,
-            'note': '等级基于关键词匹配，系数未经历史标定，仅供参考',
-        },
-
-        # 部委协同度
-        'ministry_signals': {
-            'coordination_level': coordination_level,
-            'coordination_label': coordination_label,
-            'ministry_count': ministry_count,
-            'ministries_found': list(ministry_hits.keys()),
-            'has_state_council': has_state_council,
-            'has_politburo': has_politburo,
-            'has_judicial': has_judicial,
-        },
-
         # 原始评分列表（供逐篇核验）
         'articles': [
             {k: v for k, v in a.items() if k != 'content'}
             for a in articles
         ],
 
-        # 全文内容（Step 5 语义三元组用）
+        # 全文内容（语义分析 + 加权打分用）
         'full_texts': [
             {'title': a['title'], 'column': a['column'],
              'page_no': a['page_no'], 'content': a['content']}

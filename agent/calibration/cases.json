@@ -1,0 +1,130 @@
+{
+  "version": "2026-06",
+  "methodology": "时间线为公开报道事件的人工整理；retro_intensity / retro_ministry 为按本框架七级量表与 L0-L5 协同度对历史事件的回溯标注（非当时算法输出）。lead_days 由代码从 milestone 日期到 action_date 计算。date_precision='month' 表示仅月份可靠。样本量小（n=9），校准结果给出分位区间而非点估计。",
+  "cases": [
+    {
+      "id": "shuangjian_2021",
+      "name": "双减（校外培训整治）",
+      "industry": "教育培训",
+      "frame": "社会治理框架",
+      "action_date": "2021-07-24",
+      "action_event": "中办国办印发双减意见，行业性清退开始",
+      "max_ministry": "L4",
+      "milestones": [
+        {"date": "2021-03-06", "layer": "central", "event": "领导人两会期间点名校外培训乱象", "retro_intensity": 5, "retro_ministry": "L4", "role": "signal"},
+        {"date": "2021-05-21", "layer": "central", "event": "中央深改委第十九次会议审议通过双减意见", "retro_intensity": 5, "retro_ministry": "L4", "role": "signal"},
+        {"date": "2021-06-15", "layer": "ministry", "event": "教育部设立校外教育培训监管司", "retro_intensity": 4, "retro_ministry": "L1", "role": "signal"}
+      ],
+      "notes": "领导人点名到文件落地约4.5个月；深改委审议到落地仅64天——L4级信号出现后窗口急剧压缩"
+    },
+    {
+      "id": "platform_antitrust_2020",
+      "name": "平台经济反垄断",
+      "industry": "互联网平台",
+      "frame": "共同富裕框架",
+      "action_date": "2020-12-24",
+      "action_event": "市场监管总局对阿里巴巴立案调查（执法启动）",
+      "max_ministry": "L4",
+      "milestones": [
+        {"date": "2020-11-10", "layer": "ministry", "event": "市场监管总局发布平台经济反垄断指南（征求意见稿）", "retro_intensity": 4, "retro_ministry": "L1", "role": "signal"},
+        {"date": "2020-12-11", "layer": "central", "event": "中央政治局会议首提'强化反垄断和防止资本无序扩张'", "retro_intensity": 5, "retro_ministry": "L4", "role": "signal"}
+      ],
+      "notes": "政治局定调到立案仅13天——政治局点名即近似执法同义词；指南征求意见稿是更早44天的部委信号"
+    },
+    {
+      "id": "three_redlines_2020",
+      "name": "房地产三道红线",
+      "industry": "房地产",
+      "frame": "防范金融风险框架",
+      "action_date": "2020-08-20",
+      "action_event": "央行、住建部重点房企座谈会确立三道红线融资规则",
+      "max_ministry": "L4",
+      "milestones": [
+        {"date": "2019-07-30", "layer": "central", "event": "政治局会议首提'不将房地产作为短期刺激经济的手段'", "retro_intensity": 4, "retro_ministry": "L4", "role": "signal"}
+      ],
+      "notes": "框架级转向信号（叙事定调而非整治措辞）到具体规则落地387天——4级框架信号的窗口远长于5级执行信号"
+    },
+    {
+      "id": "crypto_2021",
+      "name": "虚拟货币清退",
+      "industry": "虚拟货币/挖矿",
+      "frame": "防范金融风险框架",
+      "action_date": "2021-09-24",
+      "action_event": "央行等十部门发文全面清退虚拟货币交易与挖矿",
+      "max_ministry": "L4",
+      "milestones": [
+        {"date": "2021-05-18", "layer": "ministry", "event": "互金协会等三协会公告防范虚拟货币炒作风险", "retro_intensity": 4, "retro_ministry": "L1", "role": "signal"},
+        {"date": "2021-05-21", "layer": "central", "event": "国务院金融委会议要求'打击比特币挖矿和交易行为'", "retro_intensity": 6, "retro_ministry": "L4", "role": "signal"}
+      ],
+      "notes": "金融委'打击'措辞（6级）到十部门联合发文126天；内蒙古等地方清退6月即启动（约3周）——地方执行先于全国文件"
+    },
+    {
+      "id": "pharma_2023",
+      "name": "医药领域反腐",
+      "industry": "医药",
+      "frame": "社会治理框架",
+      "action_date": "2023-07-21",
+      "action_event": "卫健委等十部门部署为期一年的医药领域腐败集中整治",
+      "max_ministry": "L5",
+      "milestones": [
+        {"date": "2023-05-15", "date_precision": "month", "layer": "ministry", "event": "卫健委等14部门联合印发年度医药购销纠风工作要点", "retro_intensity": 4, "retro_ministry": "L2", "role": "signal"},
+        {"date": "2023-07-28", "layer": "discipline", "event": "中央纪委国家监委召开动员会配合集中整治", "retro_intensity": 6, "retro_ministry": "L5", "role": "escalation"}
+      ],
+      "notes": "14部门联合纠风要点（年度例行文件但部门数异常扩容）到集中整治67天；纪委入场后院长落马潮即刻开始——联合发文部门数突增是被低估的前导信号"
+    },
+    {
+      "id": "gaming_2021",
+      "name": "游戏未成年人防沉迷",
+      "industry": "网络游戏",
+      "frame": "社会治理框架",
+      "action_date": "2021-08-30",
+      "action_event": "新闻出版署830新规（未成年人游戏时长极限压缩）",
+      "max_ministry": "L1",
+      "milestones": [
+        {"date": "2021-08-03", "layer": "amplifier", "event": "经济参考报（新华社主管）刊文'精神鸦片竟长成数千亿产业'", "retro_intensity": 6, "retro_ministry": "L0", "role": "signal"}
+      ],
+      "notes": "官媒定性（'精神鸦片'）到新规仅27天——央媒级媒体用道德定性词汇时，决策已完成，媒体文章即背书"
+    },
+    {
+      "id": "p2p_2016",
+      "name": "P2P网贷清退",
+      "industry": "互联网金融",
+      "frame": "防范金融风险框架",
+      "action_date": "2016-04-12",
+      "action_event": "国务院组织14部委启动互联网金融风险专项整治",
+      "max_ministry": "L5",
+      "milestones": [
+        {"date": "2015-12-16", "date_precision": "month", "layer": "judicial", "event": "e租宝被立案侦查（公安介入标志性案件）", "retro_intensity": 6, "retro_ministry": "L5", "role": "signal"},
+        {"date": "2020-11-27", "layer": "closing", "event": "银保监会宣布实际运营P2P机构全部归零", "retro_intensity": 3, "retro_ministry": "L1", "role": "closing"}
+      ],
+      "notes": "标志性刑案到专项整治118天；整治到全行业归零历时4年半——运动期短、收尾期极长是金融风险类案件的形态特征"
+    },
+    {
+      "id": "didi_2021",
+      "name": "网络安全审查（滴滴）",
+      "industry": "出行平台/数据",
+      "frame": "国家安全框架",
+      "action_date": "2021-07-02",
+      "action_event": "网络安全审查办公室对滴滴启动审查，两日后下架",
+      "max_ministry": "L2",
+      "milestones": [
+        {"date": "2021-05-14", "layer": "ministry", "event": "交通运输部等八部门联合约谈滴滴等10家平台", "retro_intensity": 5, "retro_ministry": "L2", "role": "signal"}
+      ],
+      "notes": "八部门联合约谈到安全审查49天。国家安全框架下几乎无公开铺垫——上市触发即审查，印证'安全框架窗口可为零'"
+    },
+    {
+      "id": "entertainment_tax_2021",
+      "name": "文娱领域综合治理（税收）",
+      "industry": "文娱/直播电商",
+      "frame": "共同富裕框架",
+      "action_date": "2021-12-20",
+      "action_event": "薇娅13.41亿元偷逃税案公布（标志性执法落地）",
+      "max_ministry": "L2",
+      "milestones": [
+        {"date": "2021-08-27", "layer": "ministry", "event": "中央网信办开展饭圈乱象整治专项行动", "retro_intensity": 5, "retro_ministry": "L1", "role": "signal"},
+        {"date": "2021-09-18", "layer": "ministry", "event": "税务总局发文加强文娱领域从业人员税收管理", "retro_intensity": 5, "retro_ministry": "L1", "role": "signal"}
+      ],
+      "notes": "税务总局通知到标志性罚单93天；通知中'定期开展双随机抽查'等程序性表述实为执法预告"
+    }
+  ]
+}
