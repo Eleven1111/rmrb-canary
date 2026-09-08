@@ -40,6 +40,16 @@ from agent.sources.theory_channel import extract_pd_theory
 from agent.store.db import save_analysis
 from agent.store import ledger, judgments, dossier
 
+# ── P0–P3 合并引入的事件层 ─────────────────────────────────
+from agent.topics import resolve_topic
+from agent.tools.scoping import build_target_segments
+from agent.tools.event_extract import extract_events
+from agent.tools.evidence_check import verify_events
+from agent.tools.signals import build_signals
+from agent.tools.dedupe import merge_sources
+from agent.tools.change_detect import detect_changes
+from agent.tools.alerts import build_alerts
+
 
 def run_pipeline(
     keywords: list[str],
@@ -47,6 +57,9 @@ def run_pipeline(
     skip_media: bool = False,
     skip_sources: bool = False,
     window_days: int = 7,
+    topic_key: str = None,
+    as_of: str = None,
+    skip_events: bool = False,
 ) -> dict:
     """
     执行完整分析管道，返回结构化结果 dict。
@@ -55,6 +68,16 @@ def run_pipeline(
     1. 读 full_texts 做语义三元组提取
     2. 结合 dossier_context 回应上期判断，综合撰写报告
     3. 报告完成后用 --record-judgment 沉淀本期判断
+
+    新增（P0–P3 合并，加法式，不改动原有 12 步）：
+      topic_key   指定 config/topics/<key>.json 的主题口径；不给则由 keywords
+                  生成临时口径（topic_version='adhoc'），不与正式主题历史混比。
+      as_of       分析截止时点。历史回放必须显式指定。
+      skip_events 跳过事件层，退回纯 v3 行为。
+
+    事件层产出 result['events'/'signals'/'dedupe'/'changes'/'alerts']，
+    与原有的 intensity/ministry/risk_window 并列，**不互相替代**：
+    前者回答"哪个主体对哪个对象做了什么、证据在哪"，后者是词面强度特征。
     """
     result = {'keywords': keywords, 'date_requested': date}
 
@@ -182,6 +205,50 @@ def run_pipeline(
     )
     result['rolling_trend'] = rolling_trend(keywords)
     result['formulation'] = track_formulations(kept, analysis_date)
+
+    # ── 11.5 事件层：抽取 → 证据核验 → 多维信号 → 变化 → 告警 ──
+    if not skip_events:
+        print('[11.5/12] 事件抽取 + 证据核验 + 多维信号...', file=sys.stderr)
+        topic = resolve_topic(topic_key=topic_key, keywords=keywords)
+        effective_as_of = as_of or analysis_date
+        terms = topic['search_terms']
+
+        scope = build_target_segments(kept, terms,
+                                      exclude_terms=topic.get('exclude_terms'))
+        raw_events = extract_events(scope, terms, source_layer='report')
+        extraction = verify_events(raw_events.get('events', []), kept)
+        extraction['counts'] = raw_events.get('counts', {})
+
+        dedupe_res = merge_sources(kept, [])
+        signals = build_signals(extraction, agenda=summary.get('step1_agenda'),
+                                dedupe=dedupe_res, narrative=result.get('narrative'))
+
+        result['topic'] = {'topic_id': topic['topic_id'],
+                           'topic_key': topic.get('topic_key'),
+                           'topic_version': topic.get('topic_version'),
+                           'label': topic.get('label')}
+        result['as_of'] = effective_as_of
+        result['scope'] = {k: v for k, v in scope.items()
+                           if k not in ('segments', 'target_articles')}
+        result['events'] = extraction.get('events', [])
+        result['extraction'] = {k: v for k, v in extraction.items() if k != 'events'}
+        result['signals'] = signals
+        result['dedupe'] = dedupe_res
+
+        event_snapshot = {
+            'topic_id': topic['topic_id'],
+            'topic_version': topic.get('topic_version'),
+            'topic_label': topic.get('label'),
+            'date': analysis_date,
+            'as_of': effective_as_of,
+            'events': result['events'],
+            'signals': signals,
+        }
+        result['changes'] = detect_changes(event_snapshot, None)
+        result['alerts'] = build_alerts(event_snapshot)
+        result['event_layer_note'] = (
+            '事件层与词面强度层并列呈现，不互相替代。'
+            'needs_review 的事件不得直接写进结论。')
 
     # ── 12. 预测台账 + 议题档案 ────────────────────────────
     print('[12/12] 预测台账 + 议题档案...', file=sys.stderr)

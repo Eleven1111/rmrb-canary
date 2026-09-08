@@ -6,12 +6,33 @@
 浮出，由分析师裁定 hit / miss；累计输出命中率与平均提前量。
 
 状态机：open → due_review →（hit | miss | void）
+
+不可改写保证（P0–P3 合并引入）：
+  一条预测被裁定后**不得再次裁定**。重复裁定会把第一次的判断静默覆盖，
+  等于事后按已知结局改写当时的记录 —— 那样算出来的命中率没有意义。
+  要更正只能作废后重开，且留下痕迹。
+  预测落账时记录 algo_version，"规则是否冻结"因此可被核验，
+  而不是靠声称。
 """
 
 import datetime
 import json
 
 from agent.store.db import get_conn
+
+try:
+    from agent.versioning import ALGO_VERSION
+except ImportError:      # 兼容未安装事件层的旧部署
+    ALGO_VERSION = 'unknown'
+
+
+def _ensure_columns(conn):
+    """幂等迁移：给旧库补 algo_version 列。旧行标 unknown，不假装它们冻结过。"""
+    cols = {r[1] for r in conn.execute('PRAGMA table_info(predictions)')}
+    if 'algo_version' not in cols:
+        conn.execute('ALTER TABLE predictions ADD COLUMN algo_version TEXT')
+        conn.execute("UPDATE predictions SET algo_version = 'unknown' "
+                     'WHERE algo_version IS NULL')
 
 
 def record_prediction(analysis_id: int, result: dict) -> int | None:
@@ -45,11 +66,13 @@ def record_prediction(analysis_id: int, result: dict) -> int | None:
     )
 
     conn = get_conn()
+    _ensure_columns(conn)
     cur = conn.execute(
         """INSERT INTO predictions
            (analysis_id, keywords, made_on, window_start, window_end,
-            risk_level, intensity, ministry_level, statement, status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)""",
+            risk_level, intensity, ministry_level, statement, status,
+            algo_version, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)""",
         (
             analysis_id,
             json.dumps(sorted(result.get('keywords', [])), ensure_ascii=False),
@@ -60,6 +83,7 @@ def record_prediction(analysis_id: int, result: dict) -> int | None:
             level,
             ministry_level,
             statement,
+            ALGO_VERSION,
             datetime.datetime.now().isoformat(),
         ),
     )
@@ -76,6 +100,7 @@ def check_due_predictions(keywords: list[str] = None) -> list[dict]:
     keywords 提供时只检查该议题（管道内调用）；否则全量（CLI 用）。
     """
     conn = get_conn()
+    _ensure_columns(conn)
     today = datetime.datetime.now().strftime('%Y%m%d')
 
     params = [today]
@@ -113,12 +138,27 @@ def resolve_prediction(prediction_id: int, outcome: str, note: str = '') -> dict
         return {'ok': False, 'error': f'无效结果: {outcome}，须为 hit/miss/void'}
 
     conn = get_conn()
+    _ensure_columns(conn)
     row = conn.execute(
-        'SELECT id, status FROM predictions WHERE id = ?', (prediction_id,)
+        'SELECT id, status, resolved_at, resolution_note FROM predictions WHERE id = ?',
+        (prediction_id,)
     ).fetchone()
     if not row:
         conn.close()
         return {'ok': False, 'error': f'预测 #{prediction_id} 不存在'}
+
+    # 不可改写：已裁定的预测不得再次裁定。
+    # 允许重复裁定 = 允许拿已知结局回头改当时的判断，命中率会被这样刷出来。
+    if row['status'] in ('hit', 'miss', 'void'):
+        conn.close()
+        return {
+            'ok': False,
+            'error': (f'预测 #{prediction_id} 已裁定为「{row["status"]}」'
+                      f'（{row["resolved_at"]}），不得重复裁定'),
+            'existing_outcome': row['status'],
+            'existing_note': row['resolution_note'],
+            'hint': '判断有误时应作废后重开一条，保留原记录，不要覆盖。',
+        }
 
     conn.execute(
         """UPDATE predictions
@@ -134,6 +174,7 @@ def resolve_prediction(prediction_id: int, outcome: str, note: str = '') -> dict
 def ledger_stats() -> dict:
     """累计命中率统计。"""
     conn = get_conn()
+    _ensure_columns(conn)
     rows = [dict(r) for r in conn.execute(
         "SELECT status, COUNT(*) c FROM predictions GROUP BY status"
     ).fetchall()]
@@ -162,6 +203,7 @@ def ledger_stats() -> dict:
 def list_predictions(status: str = None, limit: int = 30) -> list[dict]:
     """列出预测记录（CLI 用）。"""
     conn = get_conn()
+    _ensure_columns(conn)
     if status:
         rows = conn.execute(
             'SELECT * FROM predictions WHERE status = ? ORDER BY id DESC LIMIT ?',

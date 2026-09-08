@@ -1,0 +1,98 @@
+{
+  "probe_date": "2026-09-08",
+  "note": "状态字段是 2026-09-08 实测结果，不是设计意图。blocked 的来源没有写解析器 —— 不写投机爬虫。",
+  "sources": [
+    {
+      "key": "gov_cn_zhengce",
+      "label": "中国政府网·政策",
+      "system": "国务院",
+      "authority_tier": "official_document",
+      "list_url": "https://www.gov.cn/zhengce/",
+      "link_pattern": "/zhengce/(content|zhengceku)/",
+      "status": "enabled",
+      "coverage_note": "首页仅列出最近约 6 件国务院层级文件（国令/决定/批复/复函）。这是高权威但低覆盖的入口，不是完整政策语料库。",
+      "fields_available": ["发文机关", "发文字号", "成文日期", "发布日期", "索引号", "正文"]
+    },
+    {
+      "key": "gov_cn_xxgk",
+      "label": "中国政府网·政府信息公开",
+      "system": "国务院",
+      "authority_tier": "official_document",
+      "list_url": "https://www.gov.cn/zhengce/xxgk/",
+      "link_pattern": "/zhengce/content/",
+      "status": "enabled",
+      "coverage_note": "信息公开专栏，条目稳定但更新慢，主要作为解析器的回归样本来源。",
+      "fields_available": ["发文机关", "发文字号", "成文日期", "发布日期", "索引号", "正文"]
+    },
+    {
+      "key": "gov_cn_zhengceku",
+      "label": "中国政府网·政策文件库分页",
+      "system": "国务院",
+      "status": "blocked",
+      "probe_result": "HTTP 403",
+      "coverage_note": "分页列表被拒。没有它就拿不到历史批量文件，历史回放的文件侧覆盖因此受限。"
+    },
+    {
+      "key": "sousuo_policy_api",
+      "label": "国务院政策文件库检索接口",
+      "system": "国务院",
+      "status": "blocked",
+      "probe_result": "HTTP 200 但 data=null、totalCount=0；浏览器打开页面同样为空",
+      "coverage_note": "接口应答但不返回结果，页面依赖 JS 且有反爬。未实现解析器。"
+    },
+    {
+      "key": "cac",
+      "label": "国家互联网信息办公室",
+      "system": "网信办",
+      "topics": ["ai"],
+      "status": "blocked",
+      "probe_result": "HTTP 521",
+      "coverage_note": "AI 主题最关键的主管部门来源取不到，这是当前 ai 主题证据链最大的缺口。"
+    },
+    {
+      "key": "nhc",
+      "label": "国家卫生健康委员会",
+      "system": "卫健委",
+      "topics": ["vaccine"],
+      "status": "blocked",
+      "probe_result": "HTTP 412",
+      "coverage_note": "疫苗主题主管部门来源取不到。"
+    },
+    {
+      "key": "nmpa",
+      "label": "国家药品监督管理局",
+      "system": "药监局",
+      "topics": ["vaccine"],
+      "status": "blocked",
+      "probe_result": "HTTP 412",
+      "coverage_note": "疫苗批签发与生物制品监管来源取不到。"
+    },
+    {
+      "key": "miit",
+      "label": "工业和信息化部",
+      "system": "工信部",
+      "topics": ["ai", "vaccine"],
+      "status": "unimplemented",
+      "probe_result": "首页 HTTP 200，政策文件栏目页 2KB 空壳（疑似 JS 渲染）",
+      "coverage_note": "首页可达但栏目页无内容，未实现解析器。"
+    },
+    {
+      "key": "ndrc",
+      "label": "国家发展改革委",
+      "system": "发改委",
+      "topics": ["ai"],
+      "status": "unimplemented",
+      "probe_result": "首页 HTTP 200，政策发布栏目返回 54 字节",
+      "coverage_note": "同上，未实现解析器。"
+    },
+    {
+      "key": "ndcpa",
+      "label": "国家疾病预防控制局",
+      "system": "疾控局",
+      "topics": ["vaccine"],
+      "status": "unimplemented",
+      "probe_result": "列表页 HTTP 200 且有 55 个日期，但文件链接由 JS 注入",
+      "coverage_note": "有希望，需要额外解析工作，本轮未做。"
+    }
+  ]
+}
