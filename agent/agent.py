@@ -37,7 +37,7 @@ from agent.tools.transmission_chain import locate_stage
 from agent.tools.formulation_tracker import track_formulations
 from agent.sources import collect_upstream
 from agent.sources.theory_channel import extract_pd_theory
-from agent.store.db import save_analysis
+from agent.store.db import log_run, save_analysis_detailed
 from agent.store import ledger, judgments, dossier
 
 # ── P0–P3 合并引入的事件层 ─────────────────────────────────
@@ -115,6 +115,16 @@ def run_pipeline(
     }
     result['full_texts'] = kept
 
+    # 主题身份要在入库之前定下来：storage / rolling / silence 都以 topic_id 为准，
+    # 拿不到它就只能退回关键词匹配，那正是 F10 要消除的东西。
+    topic = resolve_topic(topic_key=topic_key, keywords=keywords)
+    effective_as_of = as_of or analysis_date
+    result['topic'] = {'topic_id': topic['topic_id'],
+                       'topic_key': topic.get('topic_key'),
+                       'topic_version': topic.get('topic_version'),
+                       'label': topic.get('label')}
+    result['as_of'] = effective_as_of
+
     # ── 4-6. 叙事框架 / 话语强度 / 部委协同（加权+过滤后）────
     print('[4/12] 叙事框架分类...', file=sys.stderr)
     result['narrative'] = classify_narrative(kept)
@@ -190,10 +200,19 @@ def run_pipeline(
     # ── 10. 历史对比 + 存储 + 滚动平滑 ─────────────────────
     print('[10/12] 历史对比 + 存储 + 滚动平滑...', file=sys.stderr)
     result['trend'] = compare_history(result, keywords)
-    analysis_id = save_analysis(result)
-    result['storage'] = {'analysis_id': analysis_id, 'saved': True}
+    stored = save_analysis_detailed(result)
+    result['storage'] = {'analysis_id': stored['analysis_id'], 'saved': True,
+                         'action': stored['action'],
+                         'topic_id': stored['topic_id'],
+                         'algo_version': stored['algo_version']}
+    log_run(topic_id=stored['topic_id'], date=analysis_date,
+            as_of=effective_as_of,
+            quality_status=(result.get('fetch_quality') or {}).get('status'),
+            outcome=stored['action'],
+            topic_version=stored['topic_version'])
     result['rolling'] = rolling_verdict(
         keywords, end_date=analysis_date or None, window_days=window_days,
+        topic_id=topic['topic_id'],
     )
 
     # ── 11. 沉默检测 + 趋势 + 提法追踪 ─────────────────────
@@ -202,15 +221,17 @@ def run_pipeline(
         keywords=keywords,
         current_date=analysis_date,
         current_count=len(kept),
+        topic_id=topic['topic_id'],
     )
-    result['rolling_trend'] = rolling_trend(keywords)
+    result['rolling_trend'] = rolling_trend(
+        keywords, as_of=effective_as_of, topic_id=topic['topic_id'])
     result['formulation'] = track_formulations(kept, analysis_date)
 
     # ── 11.5 事件层：抽取 → 证据核验 → 多维信号 → 变化 → 告警 ──
     if not skip_events:
         print('[11.5/12] 事件抽取 + 证据核验 + 多维信号...', file=sys.stderr)
-        topic = resolve_topic(topic_key=topic_key, keywords=keywords)
-        effective_as_of = as_of or analysis_date
+        # topic / effective_as_of 已在步骤 3 之后解析，这里直接复用 ——
+        # 同一次运行里解析两遍，就有解析出两个不同身份的可能。
         terms = topic['search_terms']
 
         scope = build_target_segments(kept, terms,
@@ -223,11 +244,6 @@ def run_pipeline(
         signals = build_signals(extraction, agenda=summary.get('step1_agenda'),
                                 dedupe=dedupe_res, narrative=result.get('narrative'))
 
-        result['topic'] = {'topic_id': topic['topic_id'],
-                           'topic_key': topic.get('topic_key'),
-                           'topic_version': topic.get('topic_version'),
-                           'label': topic.get('label')}
-        result['as_of'] = effective_as_of
         result['scope'] = {k: v for k, v in scope.items()
                            if k not in ('segments', 'target_articles')}
         result['events'] = extraction.get('events', [])
@@ -253,7 +269,7 @@ def run_pipeline(
     # ── 12. 预测台账 + 议题档案 ────────────────────────────
     print('[12/12] 预测台账 + 议题档案...', file=sys.stderr)
     due = ledger.check_due_predictions(keywords)
-    prediction_id = ledger.record_prediction(analysis_id, result)
+    prediction_id = ledger.record_prediction(stored['analysis_id'], result)
     result['prediction'] = {
         'prediction_id': prediction_id,
         'due_review': due,
