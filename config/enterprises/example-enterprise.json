@@ -1,0 +1,25 @@
+{
+  "enterprise_key": "example-enterprise",
+  "name": "示例企业",
+  "industry": "示例行业",
+  "chair_focus": ["监管合规", "政策窗口与机会"],
+  "chair_focus_confirmed": false,
+  "jurisdictions": ["全国"],
+  "value_chain_segments": ["环节A", "环节B"],
+  "exposure_terms": ["示例暴露词1", "示例暴露词2"],
+  "topic_exposure": {
+    "ai": {
+      "relevance": "direct",
+      "segments": ["环节A"],
+      "channel": "说明该主题通过什么路径影响这些环节。",
+      "caveat": "必须写明这条推导链的限定条件，报告会原样引用。"
+    },
+    "vaccine": {
+      "relevance": "indirect",
+      "segments": ["环节B"],
+      "channel": "间接传导路径要写清楚要经过哪几步。",
+      "caveat": "间接关系必须写成间接，不得按主营业务解读。"
+    }
+  },
+  "notes": "这是模板。真实企业画像含客户业务信息，应留在本地，不要提交到公开仓库。"
+}
