@@ -46,6 +46,11 @@ def record_prediction(analysis_id: int, result: dict) -> int | None:
     level = intensity.get('weighted_max_level', intensity.get('max_level', 1))
     emoji = risk.get('risk_emoji', '🟢')
 
+    # F04：没有强度结论就不落预测。台账里记一条"基于无证据"的预测，
+    # 将来无论裁定 hit 还是 miss 都是噪声。
+    if level is None or intensity.get('status') == 'unknown':
+        return None
+
     if level < 4 and emoji == '🟢':
         return None
 

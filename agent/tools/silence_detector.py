@@ -214,24 +214,37 @@ def rolling_trend(keywords: list[str], windows: list[int] = None) -> dict:
             }
             continue
 
-        intensities = [r['max_intensity'] for r in in_window]
-        articles = [r['total_articles'] for r in in_window]
-        frames = [r['primary_frame'] for r in in_window]
+        # F01：查询是 ORDER BY date DESC（新→旧），必须先转成时间升序再分半。
+        # 原实现直接在倒序列表上取"前半 vs 后半"，前半其实是**较新**的一段，
+        # 于是 2、2、6、6（由旧到新）会被报成"下降"—— 方向整个反了。
+        ordered = sorted(in_window, key=lambda r: r['date'])
 
-        # 趋势方向：前半 vs 后半平均强度
+        intensities = [r['max_intensity'] for r in ordered]
+        articles = [r['total_articles'] for r in ordered]
+        frames = [r['primary_frame'] for r in ordered]
+
+        # 趋势方向：较早半段 vs 较近半段的平均强度
         mid = len(intensities) // 2
         if mid > 0:
-            first_half_avg = sum(intensities[:mid]) / mid
-            second_half_avg = sum(intensities[mid:]) / (len(intensities) - mid)
-            delta = second_half_avg - first_half_avg
+            earlier_avg = sum(intensities[:mid]) / mid          # 较早
+            later_avg = sum(intensities[mid:]) / (len(intensities) - mid)  # 较近
+            delta = later_avg - earlier_avg
             if delta > 0.5:
                 direction = '上升'
             elif delta < -0.5:
                 direction = '下降'
             else:
                 direction = '持平'
+            comparison = {
+                'earlier_window': f"{ordered[0]['date']}–{ordered[mid - 1]['date']}",
+                'later_window': f"{ordered[mid]['date']}–{ordered[-1]['date']}",
+                'earlier_avg_intensity': round(earlier_avg, 2),
+                'later_avg_intensity': round(later_avg, 2),
+                'delta': round(delta, 2),
+            }
         else:
             direction = '数据不足'
+            comparison = None
 
         # 框架变化次数
         frame_changes = sum(
@@ -244,6 +257,9 @@ def rolling_trend(keywords: list[str], windows: list[int] = None) -> dict:
             'avg_articles': round(sum(articles) / len(articles), 1),
             'trend_direction': direction,
             'frame_changes': frame_changes,
+            # 把比较窗口一并给出：只报"上升/下降"而不说比的是哪两段，
+            # 读者无法核对方向对不对。
+            'comparison': comparison,
         }
 
     return {

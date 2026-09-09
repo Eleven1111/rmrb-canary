@@ -103,7 +103,35 @@ def measure_intensity(articles: list[dict]) -> dict:
     # 加权最高等级：按加权得分确定实际最高等级
     # 低权重文章的高级别短语不足以单独定级——需要加权得分 >= 2.0
     nonzero = sorted(lvl for lvl, cnt in level_counts.items() if cnt > 0)
-    max_level = nonzero[-1] if nonzero else 1
+
+    # F04：没有任何命中时不得回落到 1 级"研究探索"。
+    # 空输入被包装成"该议题处于研究探索阶段、窗口 12 个月+"，
+    # 是把"没有数据"讲成了"有一个温和的政策状态" —— 两者完全不同。
+    if not nonzero:
+        return {
+            'status': 'unknown',
+            'reason': ('文章集合为空' if not articles else '文章中未命中任何强度词表'),
+            'max_level': None,
+            'max_level_name': None,
+            'max_level_triggers': [],
+            'weighted_max_level': None,
+            # 仍给出全零分布：下游可以照常读 level_N，
+            # "无证据"体现在 max_level=None 与 status='unknown'，不靠抽掉字段来表达。
+            'distribution': {
+                f'level_{lv}': {
+                    'name': INTENSITY_LEVELS[lv]['name'], 'count': 0,
+                    'weighted_score': 0.0, 'pct': 0.0, 'triggers': [],
+                    'window': INTENSITY_LEVELS[lv]['window'],
+                } for lv in range(1, 8)
+            },
+            'jump_alert': False,
+            'jump_detail': None,
+            'action_window': None,
+            'high_weight_alerts': [],
+            'note': '无证据：不输出等级、不输出政策阶段、不输出时间窗口。',
+        }
+
+    max_level = nonzero[-1]
 
     weighted_nonzero = sorted(
         lvl for lvl, sc in level_scores.items() if sc >= 2.0
@@ -137,6 +165,8 @@ def measure_intensity(articles: list[dict]) -> dict:
         }
 
     return {
+        'status': 'ok',
+        'reason': None,
         'max_level': max_level,
         'max_level_name': INTENSITY_LEVELS[max_level]['name'],
         'max_level_triggers': sorted(level_triggers[max_level]),

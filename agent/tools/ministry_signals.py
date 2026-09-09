@@ -106,8 +106,17 @@ MINISTRY_PATTERNS = {
         'tier': 'state_council',
     },
     '中央政治局': {
-        'patterns': ['政治局会议', '政治局常委', '中央政治局', '政治局集体学习'],
+        # F13：集体学习**不在**这里。它是学习活动，不是决策会议，
+        # 归到 politburo_forward，见下方独立条目。
+        'patterns': ['政治局会议', '政治局常委', '中央政治局'],
         'tier': 'politburo',
+    },
+    # F13：集体学习 = 前瞻关注信号，不是执行信号。
+    # 议题进入最高层视野是"在学"，不等于"已决策、要执行"。
+    # 把它算作 L4，会把研究关注升级成执行倒计时。
+    '政治局集体学习': {
+        'patterns': ['政治局集体学习', '集体学习'],
+        'tier': 'politburo_forward',
     },
     # 党中央议事协调机构（顶层领导挂帅，信号强度等同政治局级）
     '中央金融委员会': {
@@ -156,6 +165,7 @@ TIER_WEIGHT_THRESHOLDS = {
     'judicial': 3.0,     # 司法信号需要足够权重才算有效
     'discipline': 3.0,   # 纪检信号同司法标准
     'politburo': 2.0,    # 政治局信号阈值
+    'politburo_forward': 1.5,  # 集体学习等前瞻信号（通常只出现一次，门槛略低）
     'central_commission': 2.0,
     'state_council': 2.0,
     'ministry': 1.0,     # 普通部委门槛最低
@@ -223,6 +233,18 @@ def detect_joint_issuance(articles: list[dict]) -> dict:
     }
 
 
+COLLECTIVE_STUDY_MARKERS = ['集体学习', '专题学习', '学习会']
+DECISION_MEETING_MARKERS = ['会议决定', '会议审议', '会议强调', '会议指出', '会议部署']
+
+
+def _is_collective_study(article: dict) -> bool:
+    """该篇是否为学习活动语境。出现决策会议措辞时不算 —— 那是真的在决策。"""
+    text = f"{article.get('title', '')}\n{article.get('content', '')}"
+    if any(m in text for m in DECISION_MEETING_MARKERS):
+        return False
+    return any(m in text for m in COLLECTIVE_STUDY_MARKERS)
+
+
 def detect_ministries(articles: list[dict]) -> dict:
     """
     从文章集合中检测部委信号和协同等级（加权版）。
@@ -252,9 +274,15 @@ def detect_ministries(articles: list[dict]) -> dict:
         for a in articles:
             score, hit = weighted_pattern_match(a, config['patterns'])
             if hit:
+                # F13：先判会议事件类型，再判机构层级。
+                # 一篇同时含"中央政治局"和"集体学习"的报道讲的是学习活动，
+                # 不是决策会议 —— 若仍按 politburo 计，研究关注会被升级成执行信号。
+                tier = config['tier']
+                if tier == 'politburo' and _is_collective_study(a):
+                    tier = 'politburo_forward'
                 if ministry not in ministry_data:
                     ministry_data[ministry] = {
-                        'tier': config['tier'],
+                        'tier': tier,
                         'total_score': 0.0,
                         'hit_count': 0,
                         'in_title': False,
@@ -298,6 +326,9 @@ def detect_ministries(articles: list[dict]) -> dict:
         or tier_breakdown.get('central_commission', 0) > 0
     )
     has_state_council = tier_breakdown.get('state_council', 0) > 0
+    # 观察到即记录；是否够格升级由 effective_tiers 的门槛决定。
+    has_forward_signal = any(
+        d.get('tier') == 'politburo_forward' for d in ministry_data.values())
     ministry_count = len(ministry_data)
 
     joint = detect_joint_issuance(articles)
@@ -308,6 +339,9 @@ def detect_ministries(articles: list[dict]) -> dict:
         level, label, compression = 'L4', '政治局/中央委员会级，最高优先级', 0.4
     elif has_state_council:
         level, label, compression = 'L3', '国务院级，执行意志确认', 0.6
+    elif tier_breakdown.get('politburo_forward', 0) > 0:
+        level, label, compression = (
+            'L3-前瞻', '高层集体学习：议题进入最高层视野，属关注信号，尚未进入执行', 0.7)
     elif ministry_count >= 3 or (joint['found'] and joint['max_departments'] >= 3):
         level, label, compression = 'L2', '多部委协同，行动概率显著提升', 0.8
     elif ministry_count >= 1 or joint['found']:
@@ -346,6 +380,7 @@ def detect_ministries(articles: list[dict]) -> dict:
         'tier_breakdown': tier_breakdown,
         'has_state_council': has_state_council,
         'has_politburo': has_politburo,
+        'has_forward_signal': has_forward_signal,
         'has_judicial': has_judicial,
         'has_discipline': has_discipline,
         'joint_issuance': joint,

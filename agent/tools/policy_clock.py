@@ -143,6 +143,22 @@ def calculate_risk_window(
         factors: {部委压缩, 时钟系数, 叙事框架调整},
       }
     """
+    # F04：没有强度结论就没有窗口。让它走默认基础窗口，等于把"不知道"
+    # 讲成"未来 X 个月内会有动作" —— 那是凭空造出来的预测。
+    if intensity_level is None:
+        return {
+            'status': 'unknown',
+            'reason': '无强度结论（证据不足），不计算风险窗口',
+            'base_window': None,
+            'base_window_basis': {'source': 'none', 'note': '证据不足，未取基础窗口'},
+            'adjusted_window_months': None,
+            'adjusted_window_label': '不适用（证据不足）',
+            'risk_level': '未知',
+            'risk_emoji': '⚪',
+            'frequency': {'statement': '证据不足，不给频率陈述'},
+            'factors': {},
+        }
+
     base_lo, base_hi, basis = _resolve_base_window(intensity_level)
     base = (base_lo, base_hi)
     low = base[0] * ministry_compression * clock_coefficient * narrative_speed_modifier
