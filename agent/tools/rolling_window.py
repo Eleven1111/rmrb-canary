@@ -13,20 +13,28 @@ Tool: 滚动窗口聚合判定（纯代码）
 判定以平滑值为准，单日值仅作增量提示。
 """
 
-import json
 import math
 import datetime
 
 from agent.store.db import get_conn
+from agent.versioning import make_topic_id
 
 HALF_LIFE_DAYS = 3.0
 MIN_POINTS_HIGH = 5
 MIN_POINTS_MEDIUM = 3
 
 
-def _load_window_rows(keywords: list[str], end_date: str, window_days: int) -> list[dict]:
+def _load_window_rows(keywords: list[str], end_date: str, window_days: int,
+                      topic_id: str = None) -> list[dict]:
+    """
+    取窗口内同一主题的记录。
+
+    F10：按 topic_id 精确匹配，不再用 `keywords LIKE '%光伏%'` 回退 ——
+    那个回退会把 ["储能","光伏"] 的记录混进 ["光伏"] 的窗口，
+    平滑值于是建立在两个主题的混合序列上。
+    """
     conn = get_conn()
-    kw_json = json.dumps(sorted(keywords), ensure_ascii=False)
+    tid = topic_id or make_topic_id(keywords)
     end = datetime.datetime.strptime(end_date, '%Y%m%d')
     cutoff = (end - datetime.timedelta(days=window_days - 1)).strftime('%Y%m%d')
 
@@ -34,22 +42,9 @@ def _load_window_rows(keywords: list[str], end_date: str, window_days: int) -> l
                       COALESCE(weighted_max_intensity, max_intensity) AS intensity,
                       ministry_level, total_articles
                FROM analyses
-               WHERE keywords = ? AND date >= ? AND date <= ?
+               WHERE topic_id = ? AND date >= ? AND date <= ?
                ORDER BY date DESC, id DESC"""
-    rows = conn.execute(query, (kw_json, cutoff, end_date)).fetchall()
-
-    if len(rows) < 2:
-        like_conditions = ' AND '.join('keywords LIKE ?' for _ in keywords)
-        like_params = [f'%{kw}%' for kw in keywords] + [cutoff, end_date]
-        rows = conn.execute(
-            f"""SELECT id, date, primary_frame,
-                       COALESCE(weighted_max_intensity, max_intensity) AS intensity,
-                       ministry_level, total_articles
-                FROM analyses
-                WHERE {like_conditions} AND date >= ? AND date <= ?
-                ORDER BY date DESC, id DESC""",
-            like_params,
-        ).fetchall()
+    rows = conn.execute(query, (tid, cutoff, end_date)).fetchall()
     conn.close()
 
     # 同日多次分析只取最新一条
@@ -63,7 +58,8 @@ def _load_window_rows(keywords: list[str], end_date: str, window_days: int) -> l
     return deduped
 
 
-def rolling_verdict(keywords: list[str], end_date: str = None, window_days: int = 7) -> dict:
+def rolling_verdict(keywords: list[str], end_date: str = None, window_days: int = 7,
+                    topic_id: str = None) -> dict:
     """
     输出近 window_days 日的平滑判定。
 
@@ -80,7 +76,7 @@ def rolling_verdict(keywords: list[str], end_date: str = None, window_days: int 
     if end_date is None:
         end_date = datetime.datetime.now().strftime('%Y%m%d')
 
-    rows = _load_window_rows(keywords, end_date, window_days)
+    rows = _load_window_rows(keywords, end_date, window_days, topic_id=topic_id)
     if not rows:
         return {
             'data_points': 0,

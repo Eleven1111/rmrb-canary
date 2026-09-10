@@ -10,20 +10,28 @@ SKILL.md 核心认知："官方表述的沉默有时比发声更重要。"
 同时提供 7/30/90 日滚动趋势线。
 """
 
-import sqlite3
-import json
 import datetime
 from agent.store.db import get_conn
+from agent.versioning import make_topic_id
 
 
-def detect_silence(keywords: list[str], current_date: str, current_count: int) -> dict:
+def detect_silence(keywords: list[str], current_date: str, current_count: int,
+                   topic_id: str = None) -> dict:
     """
     检测关键词在历史数据中的沉默/降温/升温信号。
+
+    F03：历史窗口在 SQL 里就以 `date < current_date` 截断。原实现取的是
+    全表最近 30 条、再在 Python 里剔掉等于当日的那条 —— 历史回放（as_of 在过去）
+    时，比 current_date **更晚** 的记录会被当成"历史"算进平均值，
+    于是"本期是不是异常沉默"这个判断用到了它当时还不可能知道的数据。
+
+    F10：按 topic_id 精确匹配，不做关键词 LIKE 回退（会混入别的主题）。
 
     参数：
       keywords: 关键词列表
       current_date: 当前分析日期 YYYYMMDD
       current_count: 当前期匹配文章数
+      topic_id: 可选，事件层已解析出主题时直接传入
 
     返回：
       {
@@ -37,37 +45,16 @@ def detect_silence(keywords: list[str], current_date: str, current_count: int) -
       }
     """
     conn = get_conn()
-
-    # 查询同关键词组的历史分析（按日期倒序）
-    kw_json = json.dumps(sorted(keywords), ensure_ascii=False)
+    tid = topic_id or make_topic_id(keywords)
     rows = conn.execute(
-        """SELECT date, total_articles, keywords FROM analyses
-           WHERE keywords = ?
+        """SELECT date, total_articles FROM analyses
+           WHERE topic_id = ? AND date < ?
            ORDER BY date DESC LIMIT 30""",
-        (kw_json,)
+        (tid, current_date)
     ).fetchall()
-
-    # 回退：模糊匹配
-    if len(rows) < 3:
-        like_conditions = ' AND '.join(
-            'keywords LIKE ?' for _ in keywords
-        )
-        like_params = [f'%{kw}%' for kw in keywords]
-        rows = conn.execute(
-            f"""SELECT date, total_articles, keywords FROM analyses
-                WHERE {like_conditions}
-                ORDER BY date DESC LIMIT 30""",
-            like_params,
-        ).fetchall()
-
     conn.close()
 
-    # 排除当前日期
-    historical = [
-        {'date': r['date'], 'count': r['total_articles']}
-        for r in rows
-        if r['date'] != current_date
-    ]
+    historical = [{'date': r['date'], 'count': r['total_articles']} for r in rows]
 
     if not historical:
         return {
@@ -123,13 +110,21 @@ def detect_silence(keywords: list[str], current_date: str, current_count: int) -
     }
 
 
-def rolling_trend(keywords: list[str], windows: list[int] = None) -> dict:
+def rolling_trend(keywords: list[str], windows: list[int] = None,
+                  as_of: str = None, topic_id: str = None) -> dict:
     """
     多期滚动趋势分析。
+
+    F03 两处：查询以 `date <= as_of` 截断；窗口起点也从 as_of 往回推，
+    而不是从 `datetime.now()`。原实现两处都没有 as_of ——
+    回放 2026-06-01 时，"近 7 天"算的是今天往前 7 天，窗口里一条记录都不该有，
+    却因为没有上界把之后所有期都当成了历史。
 
     参数：
       keywords: 关键词列表
       windows: 滚动窗口天数列表，默认 [7, 30, 90]
+      as_of: 截止时点 YYYYMMDD，默认今天。历史回放必须显式给出。
+      topic_id: 可选，事件层已解析出主题时直接传入
 
     返回：
       {
@@ -144,35 +139,20 @@ def rolling_trend(keywords: list[str], windows: list[int] = None) -> dict:
     """
     if windows is None:
         windows = [7, 30, 90]
+    if as_of is None:
+        as_of = datetime.datetime.now().strftime('%Y%m%d')
 
     conn = get_conn()
-    kw_json = json.dumps(sorted(keywords), ensure_ascii=False)
-
-    # 获取所有历史分析
+    tid = topic_id or make_topic_id(keywords)
     rows = conn.execute(
         """SELECT date, primary_frame,
                   COALESCE(weighted_max_intensity, max_intensity) AS max_intensity,
                   total_articles, risk_signal, ministry_level
            FROM analyses
-           WHERE keywords = ?
+           WHERE topic_id = ? AND date <= ?
            ORDER BY date DESC LIMIT 90""",
-        (kw_json,)
+        (tid, as_of)
     ).fetchall()
-
-    # 回退模糊匹配
-    if len(rows) < 3:
-        like_conditions = ' AND '.join('keywords LIKE ?' for _ in keywords)
-        like_params = [f'%{kw}%' for kw in keywords]
-        rows = conn.execute(
-            f"""SELECT date, primary_frame,
-                       COALESCE(weighted_max_intensity, max_intensity) AS max_intensity,
-                       total_articles, risk_signal, ministry_level
-                FROM analyses
-                WHERE {like_conditions}
-                ORDER BY date DESC LIMIT 90""",
-            like_params,
-        ).fetchall()
-
     conn.close()
 
     if not rows:
@@ -198,10 +178,10 @@ def rolling_trend(keywords: list[str], windows: list[int] = None) -> dict:
 
     # 按窗口聚合
     window_results = {}
-    now = datetime.datetime.now()
+    anchor = datetime.datetime.strptime(as_of, '%Y%m%d')
 
     for w in windows:
-        cutoff = (now - datetime.timedelta(days=w)).strftime('%Y%m%d')
+        cutoff = (anchor - datetime.timedelta(days=w)).strftime('%Y%m%d')
         in_window = [r for r in all_records if r['date'] >= cutoff]
 
         if not in_window:
