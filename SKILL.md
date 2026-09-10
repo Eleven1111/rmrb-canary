@@ -37,10 +37,11 @@ description: |
 
 ```bash
 # 先切到本 SKILL.md 所在目录，再执行
-python3 -m agent.agent --topic ai --enterprise bgi
+python3 -m agent.agent --topic ai --enterprise example-enterprise
 ```
 
-已配置的试点主题：`ai`（人工智能）、`vaccine`（疫苗）；企业画像：`bgi`（华大基因）。
+已配置的试点主题：`ai`（人工智能）、`vaccine`（疫苗）；企业画像模板：`example-enterprise`。
+真实客户画像放在 `config/enterprises/<key>.json`，**不进版本库**（.gitignore 白名单）。
 定义与暴露映射见 `references/topics.md`。`--list-topics` 可列出全部。
 
 | 参数 | 含义 |
@@ -62,7 +63,7 @@ python3 -m agent.agent --topic ai --enterprise bgi
 批量运行多个主题（共享同一份文档缓存，第二个主题不再重抓全报）：
 
 ```bash
-python3 -m agent.runner --topics ai vaccine --enterprise bgi
+python3 -m agent.runner --topics ai vaccine --enterprise example-enterprise
 ```
 
 ```bash

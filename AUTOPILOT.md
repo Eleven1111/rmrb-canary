@@ -14,7 +14,7 @@
 
 | 作业名 | 建议周期 | 命令 | 停止命令 |
 |---|---|---|---|
-| `rmrb-daily` | 每日出版时段一次 | `python3 -m agent.runner --topics ai vaccine --enterprise bgi` | `launchctl unload ~/Library/LaunchAgents/rmrb-daily.plist`（作业创建后此处填实际值） |
+| `rmrb-daily` | 每日出版时段一次 | `python3 -m agent.runner --topics ai vaccine --enterprise <enterprise-key>` | `launchctl unload ~/Library/LaunchAgents/rmrb-daily.plist`（作业创建后此处填实际值） |
 | `policy-docs-poll` | 30–60 分钟 | `python3 -m agent.runner --topics ai vaccine --skip-media` | 同上 |
 
 启动前必须确定的事项：
@@ -33,6 +33,6 @@
 ## 手动运行（不属于后台作业）
 
 ```bash
-python3 -m agent.runner --topics ai vaccine --enterprise bgi
+python3 -m agent.runner --topics ai vaccine --enterprise <enterprise-key>
 python3 -m agent.runner --pending        # 查看待投递告警
 ```

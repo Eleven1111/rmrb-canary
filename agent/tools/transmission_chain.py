@@ -38,6 +38,21 @@ def _layer_summary(items: list[dict]) -> dict:
     }
 
 
+def _at_least(value, threshold) -> bool:
+    """value >= threshold，但 value 为 None（未知）时一律返回 False。"""
+    return value is not None and value >= threshold
+
+
+def _at_most(value, threshold) -> bool:
+    """
+    value <= threshold，但 value 为 None（未知）时一律返回 False。
+
+    注意这与 _at_least 不是对称关系：两个方向的"未知"都返回 False，
+    因为"不知道强度"既不能证明它高、也不能证明它低。
+    """
+    return value is not None and value <= threshold
+
+
 def locate_stage(
     rmrb_signals: dict,
     upstream: dict,
@@ -62,6 +77,14 @@ def locate_stage(
     """
     texts = texts or []
 
+    # 放大器层的两个数值都可能缺：article_count 缺省视为 0，
+    # intensity_level 则区分"0 级"和"不知道"，后者不参与任何阈值比较。
+    article_count = rmrb_signals.get('article_count') or 0
+    intensity = rmrb_signals.get('intensity_level')
+    intensity_known = isinstance(intensity, (int, float)) and not isinstance(intensity, bool)
+    if not intensity_known:
+        intensity = None
+
     central_docs = upstream.get('central_docs', {})
     ministry_docs = upstream.get('ministry_docs', {})
     theory = upstream.get('theory', {})
@@ -79,14 +102,18 @@ def locate_stage(
         'central': _layer_summary(central_docs.get('items', [])),
         'ministry': _layer_summary(ministry_docs.get('items', [])),
         'amplifier': {
-            'active': rmrb_signals.get('article_count', 0) > 0,
-            'count': rmrb_signals.get('article_count', 0),
-            'intensity': rmrb_signals.get('intensity_level', 1),
+            'active': article_count > 0,
+            'count': article_count,
+            'intensity': intensity,
+            'intensity_known': intensity_known,
         },
     }
 
-    intensity = rmrb_signals.get('intensity_level', 1)
-    pd_hot = rmrb_signals.get('article_count', 0) >= 3 or intensity >= 4
+    # 强度未知时，任何以强度为条件的分支一律不成立 —— 而不是当成 1 级。
+    # 证据不足时 measure_intensity 返回 max_level=None（F04：没证据不许落成
+    # "1 级研究探索"）。若在这里把 None 补成 1，等于从后门把那个结论放回来：
+    # "不知道强度"会被读成"强度极低"，收尾期/常态化两个分支会因此假成立。
+    pd_hot = article_count >= 3 or _at_least(intensity, 4)
     central_active = (
         layers['central']['active']
         or rmrb_signals.get('has_politburo', False)
@@ -98,7 +125,7 @@ def locate_stage(
     enforcement = (
         rmrb_signals.get('has_judicial', False)
         or rmrb_signals.get('has_discipline', False)
-        or intensity >= 6
+        or _at_least(intensity, 6)
     )
     normalization_hits = _scan_phrases(texts, NORMALIZATION_PHRASES)
     closing_hits = _scan_phrases(texts, CLOSING_PHRASES)
@@ -107,10 +134,10 @@ def locate_stage(
     if enforcement and not closing_hits:
         stage = '运动期'
         evidence = '司法/纪检入轨或强度≥6级——执法已展开，窗口关闭。'
-    elif closing_hits and intensity <= 4:
+    elif closing_hits and _at_most(intensity, 4):
         stage = '收尾期'
         evidence = f"出现收尾叙事（{'/'.join(closing_hits)}）且强度回落——整治进入总结阶段，政策松动早期指标。"
-    elif normalization_hits and intensity <= 3:
+    elif normalization_hits and _at_most(intensity, 3):
         stage = '常态化'
         evidence = f"出现制度化叙事（{'/'.join(normalization_hits)}）——运动转入长效机制，风险曲线走平。"
     elif (ministry_joint or (layers['ministry']['active'] and central_active)) and pd_hot:
@@ -153,10 +180,15 @@ def locate_stage(
         key=lambda x: x['first_seen'],
     )
 
+    if not intensity_known:
+        # 说出来。少了一路证据却不标注，读者会把"未定位"读成"确实没信号"。
+        evidence += '（本期无强度结论，凡以强度为条件的判定均未参与）'
+
     return {
         'stage': stage,
         'confidence': confidence,
         'evidence': evidence,
+        'intensity_known': intensity_known,
         'layers': layers,
         'ministry_joint_docs': [
             i for i in ministry_docs.get('items', []) if i.get('is_joint')

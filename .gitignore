@@ -12,4 +12,9 @@ venv/
 dist/
 build/
 .DS_Store
-# SKILL.md is now tracked
+.pytest_cache/
+
+# 客户数据白名单：企业画像默认全部忽略，只放行示例模板。
+# 这是本仓库唯一的客户数据防线 —— 新增客户画像时不要在这里开口子。
+config/enterprises/*
+!config/enterprises/example-enterprise.json
