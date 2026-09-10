@@ -197,10 +197,13 @@ def rolling_trend(keywords: list[str], windows: list[int] = None,
         if not in_window:
             window_results[f'{w}d'] = {
                 'count': 0,
-                'avg_intensity': 0,
+                'graded_count': 0,
+                'unrated_count': 0,
+                'avg_intensity': None,
                 'avg_articles': 0,
                 'trend_direction': '无数据',
                 'frame_changes': 0,
+                'comparison': None,
             }
             continue
 
@@ -209,11 +212,18 @@ def rolling_trend(keywords: list[str], windows: list[int] = None,
         # 于是 2、2、6、6（由旧到新）会被报成"下降"—— 方向整个反了。
         ordered = sorted(in_window, key=lambda r: r['date'])
 
-        intensities = [r['max_intensity'] for r in ordered]
-        articles = [r['total_articles'] for r in ordered]
+        # 证据不足的期，强度入库为 NULL（F04：没证据不许落成 1 级）。
+        # 这类期**排除出强度统计**，不能补 0 —— 补 0 会把"不知道"当成
+        # "强度极低"，压低均值、把趋势拉成"下降"。排除了几期要报出来，
+        # 否则读者无从判断这条均线是建立在几期证据上的。
+        graded = [r for r in ordered if r['max_intensity'] is not None]
+        unrated = len(ordered) - len(graded)
+
+        intensities = [r['max_intensity'] for r in graded]
+        articles = [r['total_articles'] or 0 for r in ordered]
         frames = [r['primary_frame'] for r in ordered]
 
-        # 趋势方向：较早半段 vs 较近半段的平均强度
+        # 趋势方向：较早半段 vs 较近半段的平均强度（只用有强度结论的期）
         mid = len(intensities) // 2
         if mid > 0:
             earlier_avg = sum(intensities[:mid]) / mid          # 较早
@@ -225,15 +235,18 @@ def rolling_trend(keywords: list[str], windows: list[int] = None,
                 direction = '下降'
             else:
                 direction = '持平'
+            # 比较窗口的日期必须取自 graded —— mid 是按有强度结论的期数分的半，
+            # 用 ordered 索引会标出一段并没有参与计算的日期区间。
             comparison = {
-                'earlier_window': f"{ordered[0]['date']}–{ordered[mid - 1]['date']}",
-                'later_window': f"{ordered[mid]['date']}–{ordered[-1]['date']}",
+                'earlier_window': f"{graded[0]['date']}–{graded[mid - 1]['date']}",
+                'later_window': f"{graded[mid]['date']}–{graded[-1]['date']}",
                 'earlier_avg_intensity': round(earlier_avg, 2),
                 'later_avg_intensity': round(later_avg, 2),
                 'delta': round(delta, 2),
+                'unrated_excluded': unrated,
             }
         else:
-            direction = '数据不足'
+            direction = '强度证据不足' if unrated else '数据不足'
             comparison = None
 
         # 框架变化次数
@@ -243,7 +256,12 @@ def rolling_trend(keywords: list[str], windows: list[int] = None,
 
         window_results[f'{w}d'] = {
             'count': len(in_window),
-            'avg_intensity': round(sum(intensities) / len(intensities), 1),
+            # count 是窗口内的期数，graded_count 才是均值的分母。
+            # 两者不等时，avg_intensity 只代表有强度结论的那几期。
+            'graded_count': len(graded),
+            'unrated_count': unrated,
+            'avg_intensity': (round(sum(intensities) / len(intensities), 1)
+                              if intensities else None),
             'avg_articles': round(sum(articles) / len(articles), 1),
             'trend_direction': direction,
             'frame_changes': frame_changes,
