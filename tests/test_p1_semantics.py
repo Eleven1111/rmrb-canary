@@ -191,7 +191,7 @@ class TestEvidenceCheck(unittest.TestCase):
             'object_terms': ['人工智能'],
             'evidence': {'article_title': '人工智能产业观察',
                          'quote': '工业和信息化部推进人工智能标准建设。',
-                         'char_start': 0, 'char_end': 20},
+                         'char_start': 0, 'char_end': len('工业和信息化部推进人工智能标准建设。')},
         }
         base.update(over)
         return base

@@ -230,11 +230,18 @@ def fetch_documents(topic_terms: list[str] = None, limit_per_source: int = 20,
 
         for item in listing['items']:
             try:
-                cached = cache.get_document(item['url']) if cache else None
+                # 当前监测要重新验证，才能发现页面修订；历史回放只能取当时
+                # 已观察到的缓存版本，绝不能抓今天的页面倒灌进过去。
+                cached = cache.get_document(item['url'], as_of=as_of) if (cache and as_of) else None
                 if cached:
                     doc = cached
                     from_cache += 1
                 else:
+                    if as_of and cache:
+                        failures.append({'source_key': source['key'], 'stage': 'historical_detail',
+                                         'url': item['url'],
+                                         'error': '该时点没有已观察到的缓存版本'})
+                        continue
                     html = fetch_url(item['url']).text
                     doc = parse_document(html, item['url'], source)
                     if cache:

@@ -77,11 +77,30 @@ class DocumentCache:
         self.stats = {'hits': 0, 'misses': 0, 'stores': 0, 'new_versions': 0}
 
     # ── 单篇文档 ────────────────────────────────────────────
-    def get_document(self, url: str) -> dict | None:
+    def get_document(self, url: str, as_of: str = None) -> dict | None:
         if not self.enabled:
             return None
         conn = _conn()
         row = conn.execute('SELECT * FROM documents WHERE url = ?', (url,)).fetchone()
+        if row and as_of:
+            # 历史回放只能读取当时已经观察到的版本。发布日期更早不能证明
+            # 系统在 as_of 那天已经发现过后来的修订正文。
+            version = conn.execute(
+                'SELECT payload_json, version, observed_at FROM document_versions '
+                'WHERE url = ? AND substr(observed_at, 1, 10) <= ? '
+                'ORDER BY version DESC LIMIT 1',
+                (url, f'{as_of[:4]}-{as_of[4:6]}-{as_of[6:]}'),
+            ).fetchone()
+            if not version:
+                conn.close()
+                self.stats['misses'] += 1
+                return None
+            payload = json.loads(version['payload_json'])
+            payload['cache_version'] = version['version']
+            payload['from_cache'] = True
+            conn.close()
+            self.stats['hits'] += 1
+            return payload
         conn.close()
         if not row:
             self.stats['misses'] += 1
@@ -146,9 +165,9 @@ class DocumentCache:
         return {'action': action, 'version': version}
 
     # ── 整期人民日报 ───────────────────────────────────────
-    def get_issue(self, date: str) -> dict | None:
+    def get_issue(self, date: str, as_of: str = None) -> dict | None:
         """取整期缓存。多个主题共享同一期采集结果（§7.1「各主题共享抓取结果」）。"""
-        return self.get_document(f'rmrb_issue:{date}')
+        return self.get_document(f'rmrb_issue:{date}', as_of=as_of)
 
     def put_issue(self, date: str, summary: dict) -> dict:
         return self.put_document(f'rmrb_issue:{date}', summary, kind='rmrb_issue')

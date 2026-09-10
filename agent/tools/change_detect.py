@@ -59,6 +59,24 @@ def _record(question, focus, changed, detail, old_evidence=None, new_evidence=No
     }
 
 
+def _event_evidence(snapshot, limit=3):
+    return [event.get('evidence') for event in (snapshot or {}).get('events', [])
+            if event.get('evidence_verified') and not event.get('needs_review')][:limit]
+
+
+def _event_values(snapshot, field):
+    values = set()
+    for event in (snapshot or {}).get('events', []):
+        if not (event.get('evidence_verified') and not event.get('needs_review')):
+            continue
+        value = event.get(field)
+        if isinstance(value, (list, tuple, set)):
+            values.update(str(item) for item in value if item not in (None, ''))
+        elif value not in (None, ''):
+            values.add(str(value))
+    return values
+
+
 def detect_changes(current: dict, previous: dict = None,
                    comparable: bool = True) -> dict:
     """
@@ -124,6 +142,7 @@ def detect_changes(current: dict, previous: dict = None,
     changes.append(_record(
         '措辞变了吗', QUESTIONS[0][1], d['changed'] or d_ob['changed'],
         f"方向构成 {d['old']} → {d['new']}；约束层级 {d_ob['old']} → {d_ob['new']}",
+        old_evidence=_event_evidence(previous),
         new_evidence=[e for v in (_dim(cur_sig, '政策方向', 'by_direction') or {}).values()
                       for e in v.get('evidence', [])][:3],
     ))
@@ -133,21 +152,26 @@ def detect_changes(current: dict, previous: dict = None,
     old_regions = set(_dim(prev_sig, '适用范围', 'regions') or [])
     new_regions = set(_dim(cur_sig, '适用范围', 'regions') or [])
     region_added = sorted(new_regions - old_regions)
+    region_removed = sorted(old_regions - new_regions)
     changes.append(_record(
         '范围变了吗', QUESTIONS[1][1],
-        d['changed'] or bool(region_added),
-        f"范围标签 {d['old']} → {d['new']}；新增地域 {region_added or '无'}",
+        d['changed'] or bool(region_added or region_removed),
+        f"范围标签 {d['old']} → {d['new']}；新增地域 {region_added or '无'}；移除地域 {region_removed or '无'}",
+        old_evidence=_event_evidence(previous),
         new_evidence=_dim(cur_sig, '适用范围', 'exceptions') or [],
     ))
 
     # 3. 责任
     old_resp = (_dim(prev_sig, '约束与动作', 'counts') or {}).get('责任', 0)
     new_resp = (_dim(cur_sig, '约束与动作', 'counts') or {}).get('责任', 0)
+    old_subjects = _event_values(previous, 'subject')
+    new_subjects = _event_values(current, 'subject')
     first_time = old_resp == 0 and new_resp > 0
     changes.append(_record(
-        '责任变了吗', QUESTIONS[2][1], old_resp != new_resp,
-        f"责任类表述 {old_resp} → {new_resp}"
+        '责任变了吗', QUESTIONS[2][1], old_resp != new_resp or old_subjects != new_subjects,
+        f"责任类表述 {old_resp} → {new_resp}；主体 {sorted(old_subjects)} → {sorted(new_subjects)}"
         + ('（本系统首次观察到责任条款）' if first_time else ''),
+        old_evidence=_event_evidence(previous),
         new_evidence=((_dim(cur_sig, '执行证据', 'components') or {})
                       .get('责任主体', {}).get('evidence', [])),
     ))
@@ -156,11 +180,15 @@ def detect_changes(current: dict, previous: dict = None,
     resource_tools = ('财政', '税收', '信贷', '采购')
     old_res = {t: (_dim(prev_sig, '政策工具', 'counts') or {}).get(t, 0) for t in resource_tools}
     new_res = {t: (_dim(cur_sig, '政策工具', 'counts') or {}).get(t, 0) for t in resource_tools}
+    old_amounts = _event_values(previous, 'amounts')
+    new_amounts = _event_values(current, 'amounts')
     changes.append(_record(
-        '资源变了吗', QUESTIONS[3][1], old_res != new_res,
-        f"资源类工具 {old_res} → {new_res}",
-        new_evidence=((_dim(cur_sig, '执行证据', 'components') or {})
-                      .get('资源安排', {}).get('evidence', [])),
+        '资源变了吗', QUESTIONS[3][1], old_res != new_res or old_amounts != new_amounts,
+        f"资源类工具 {old_res} → {new_res}；金额 {sorted(old_amounts)} → {sorted(new_amounts)}",
+        old_evidence=_event_evidence(previous),
+        new_evidence=(_event_evidence(current) or
+                      ((_dim(cur_sig, '执行证据', 'components') or {})
+                       .get('资源安排', {}).get('evidence', []))),
     ))
 
     # 5. 程序
@@ -169,6 +197,7 @@ def detect_changes(current: dict, previous: dict = None,
         '程序推进了吗', QUESTIONS[4][1], d['changed'],
         f"程序状态 {d['old']} → {d['new']}；新增 {d['added'] or '无'}。"
         '程序允许跳转与并行，新增某状态不等于线性推进。',
+        old_evidence=_event_evidence(previous), new_evidence=_event_evidence(current),
     ))
 
     # 6. 执行
@@ -184,6 +213,7 @@ def detect_changes(current: dict, previous: dict = None,
         f"{_dim(cur_sig, '执行证据', 'components_present')}；"
         f"新补齐 {newly or '无'}，本期缺失 {lost or '无'}。"
         '构件缺失可能只是本期未报道，不等于执行倒退。',
+        old_evidence=_event_evidence(previous), new_evidence=_event_evidence(current),
     ))
 
     # 7. 方向分化
@@ -193,6 +223,7 @@ def detect_changes(current: dict, previous: dict = None,
         '方向分化了吗', QUESTIONS[6][1], old_co != new_co,
         f"支持与限制/规范并存：{old_co} → {new_co}。"
         '并存说明同一议题内不同对象受到不同对待，必须分对象写，不能合成一个方向。',
+        old_evidence=_event_evidence(previous),
         new_evidence=[e for v in (_dim(cur_sig, '政策方向', 'by_direction') or {}).values()
                       for e in v.get('evidence', [])][:3],
     ))

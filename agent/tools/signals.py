@@ -23,7 +23,12 @@ EXECUTION_COMPONENTS = {
     '责任主体': lambda e: '责任' in e.get('obligation_levels', []),
     '细则或标准': lambda e: '标准' in e.get('policy_tools', []),
     '资源安排': lambda e: any(t in e.get('policy_tools', []) for t in ('财政', '税收', '信贷', '采购')),
-    '执行记录': lambda e: ('执法' in e.get('policy_tools', []) and not e.get('negated')),
+    # 已宣布的未来行动不是执行记录。只有当前时态、明确已发生的执法动作
+    # 才能作为兑现证据；“将开展专项行动”仍属于部署或计划。
+    '执行记录': lambda e: ('执法' in e.get('policy_tools', [])
+                        and not e.get('negated')
+                        and e.get('tense') == 'current'
+                        and e.get('is_new_action')),
 }
 
 
@@ -52,7 +57,8 @@ def _qualified(events):
     return [e for e in events
             if e.get('applies_to_topic')
             and e.get('authority') == 'official'
-            and e.get('evidence_verified')]
+            and e.get('evidence_verified')
+            and not e.get('needs_review')]
 
 
 def _evidence_sample(events, limit=3):
@@ -85,7 +91,10 @@ def build_signals(extraction: dict, agenda: dict = None,
         return _unknown('本期没有抽出任何事件')
 
     qualified = _qualified(events)
-    historical = [e for e in qualified if e.get('tense') == 'historical']
+    # 历史回顾不进入当期结论，但仍应被统计，即便它还有其他待核验原因。
+    historical = [e for e in events if e.get('applies_to_topic')
+                  and e.get('authority') == 'official'
+                  and e.get('evidence_verified') and e.get('tense') == 'historical']
     current = [e for e in qualified if e.get('tense') != 'historical']
     review = [e for e in events if e.get('needs_review')]
 

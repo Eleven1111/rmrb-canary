@@ -79,7 +79,8 @@ def replay(topic_key: str, dates: list[str], enterprise_key: str = None,
     for date in dates:
         try:
             snap = run_pipeline(keywords=None, topic_key=topic_key, date=date,
-                                as_of=date, skip_media=skip_media)
+                                as_of=date, skip_media=skip_media,
+                                enterprise_key=enterprise_key, dry_run=dry_run)
         except Exception as e:
             failures.append({'date': date, 'error': str(e),
                              'traceback': traceback.format_exc()[-400:]})

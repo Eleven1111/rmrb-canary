@@ -121,6 +121,7 @@ SCOPE_TERMS = {
 REGION_PATTERN = re.compile(
     r'(北京|上海|广东|深圳|浙江|江苏|四川|湖北|湖南|河南|河北|山东|陕西|福建|安徽|'
     r'辽宁|吉林|黑龙江|云南|贵州|广西|内蒙古|新疆|西藏|青海|甘肃|宁夏|海南|重庆|天津|江西|山西)')
+AMOUNT_PATTERN = re.compile(r'(?:人民币)?\s*\d+(?:\.\d+)?\s*(?:亿|万)?元')
 
 # ── 否定与时态 ───────────────────────────────────────────
 NEGATION_MARKERS = ['不得', '严禁', '禁止', '不再', '不予', '避免', '防止', '杜绝',
@@ -145,6 +146,13 @@ def _match_any(text: str, terms) -> list[str]:
 
 def _detect_subject(clause: str) -> dict:
     """主体识别。中央机关、地方机关、市场主体、被引述观点必须分开。"""
+    # “专家建议国务院……”里的国务院是建议对象，不是实施主体。先处理
+    # 引述观点，才能避免随后中央机关词表把它误判成官方已经行动。
+    quoted = _match_any(clause, QUOTED_SUBJECTS)
+    if quoted and _match_any(clause, QUOTED_VERBS):
+        return {'subject': quoted[0], 'level': '非官方', 'authority': 'quoted_opinion',
+                'all_matched': quoted}
+
     central = _match_any(clause, CENTRAL_SUBJECTS)
     if central:
         return {'subject': central[0], 'level': '中央', 'authority': 'official',
@@ -162,11 +170,6 @@ def _detect_subject(clause: str) -> dict:
         # 不能因为"没点名"就当成非官方行为丢掉。
         return {'subject': unspecified[0], 'level': '未指明机关',
                 'authority': 'official', 'all_matched': unspecified}
-
-    quoted = _match_any(clause, QUOTED_SUBJECTS)
-    if quoted and _match_any(clause, QUOTED_VERBS):
-        return {'subject': quoted[0], 'level': '非官方', 'authority': 'quoted_opinion',
-                'all_matched': quoted}
 
     market = _match_any(clause, MARKET_SUBJECTS)
     if market:
@@ -335,12 +338,12 @@ def extract_events(scope: dict, topic_terms: list[str],
                 review_reasons.append('主体由同句前文继承而来，需确认该分句确实沿用同一主体')
             if subject.get('from_metadata'):
                 review_reasons.append('主体取自文件发文机关（无主语句），需确认该条款的实际执行主体')
-            if not tools and direction != '未明确':
-                review_reasons.append('只有方向表述，没有具体政策工具')
             if subject['authority'] in ('quoted_opinion', 'non_official'):
                 review_reasons.append('主体为被引述观点或市场主体，不是官方行动')
-            if direction in ('未明确', '混合'):
+            if direction == '混合':
                 review_reasons.append(f'方向{direction}，需回原文消解')
+            elif direction == '未明确' and not (tools or status_hits):
+                review_reasons.append('方向未明确且没有可核验的工具或程序状态')
             if tense in ('historical', 'ambiguous'):
                 review_reasons.append(f'时态为{tense}，可能是历史回顾而非本期新增')
             if not applies:
@@ -373,6 +376,7 @@ def extract_events(scope: dict, topic_terms: list[str],
                 'applies_to_topic': applies,
                 'scope_labels': scope_info['scope_labels'],
                 'regions': scope_info['regions'],
+                'amounts': sorted(set(AMOUNT_PATTERN.findall(clause))),
                 'has_exception': scope_info['has_exception'],
                 'is_new_action': (tense not in ('historical', 'ambiguous')
                                   and subject['authority'] == 'official'
@@ -390,7 +394,9 @@ def extract_events(scope: dict, topic_terms: list[str],
                      'char_start': seg_start if subject.get('inherited')
                      else seg_start + c_start,
                      'char_end': (seg_start + len(seg_text)) if subject.get('inherited')
-                     else seg_start + c_end},
+                     # _split_clauses 的正则 span 包含分隔符，clause 已剥离。
+                     # 用 c_end 会把“，”计入位置，使实际切片多一个字符。
+                     else seg_start + c_start + len(clause)},
                     '/'.join(sorted(tools.keys())) or '/'.join(sorted(status_hits.keys())),
                 ),
             })

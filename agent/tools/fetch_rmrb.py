@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.abspath(SCRIPTS_DIR))
 import rmrb_fetch
 
 
-def fetch_rmrb(keywords: list[str], date: str | None = None, cache=None) -> dict:
+def fetch_rmrb(keywords: list[str], date: str | None = None, cache=None,
+               as_of: str | None = None) -> dict:
     """
     采集人民日报最新一期（或指定日期），按关键词过滤，返回结构化 summary。
 
@@ -32,9 +33,22 @@ def fetch_rmrb(keywords: list[str], date: str | None = None, cache=None) -> dict
 
     if cache is not None:
         year, month, day = rmrb_fetch.resolve_date(date)
-        cached = cache.get_issue(f'{year}{month}{day}')
+        issue_date = f'{year}{month}{day}'
+        cached = cache.get_issue(issue_date, as_of=as_of)
         if cached:
             return _filter_summary(cached, keywords)
+        if as_of:
+            # 回放只能使用当时已观察到的整期快照；今天重新抓一份旧报纸会把
+            # 当下可得性倒灌到过去，必须显式失败而不是悄悄补采。
+            return {
+                'date': issue_date, 'total_articles': 0, 'total_pages': 0,
+                'articles': [], 'full_texts': [], 'step1_agenda': {}, 'step4_regions': {},
+                'fetch_quality': {
+                    'status': 'failed', 'total_scanned_articles': None,
+                    'silence_conclusion_allowed': False,
+                    'reason': '历史截面没有已观察到的人民日报整期缓存',
+                },
+            }
 
     summary = rmrb_fetch.fetch(
         date_str=date,

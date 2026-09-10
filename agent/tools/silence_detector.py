@@ -16,7 +16,8 @@ from agent.versioning import make_topic_id
 
 
 def detect_silence(keywords: list[str], current_date: str, current_count: int,
-                   topic_id: str = None) -> dict:
+                   topic_id: str = None, topic_version: str = None,
+                   algo_version: str = None, quality_complete: bool = True) -> dict:
     """
     检测关键词在历史数据中的沉默/降温/升温信号。
 
@@ -44,14 +45,23 @@ def detect_silence(keywords: list[str], current_date: str, current_count: int,
         detail: str,
       }
     """
+    if not quality_complete:
+        return {'signal': '未知', 'signal_strength': None, 'current_count': current_count,
+                'historical_avg': None, 'historical_max': None, 'recent_counts': [],
+                'detail': '本期采集不完整，禁止用报道量给出沉默或升降结论。'}
     conn = get_conn()
     tid = topic_id or make_topic_id(keywords)
-    rows = conn.execute(
-        """SELECT date, total_articles FROM analyses
-           WHERE topic_id = ? AND date < ?
-           ORDER BY date DESC LIMIT 30""",
-        (tid, current_date)
-    ).fetchall()
+    # 质量未知的旧行不参加生产入口的判断（入口会传 quality_complete=False），
+    # 但保留给显式调用者的兼容路径，避免升级前无该列的历史被静默抹掉。
+    clauses = ['topic_id = ?', 'date < ?',
+               "(quality_status = 'complete' OR quality_status IS NULL)"]
+    params = [tid, current_date]
+    if topic_version is not None:
+        clauses.append('topic_version = ?'); params.append(topic_version)
+    if algo_version is not None:
+        clauses.append('algo_version = ?'); params.append(algo_version)
+    rows = conn.execute('SELECT date, total_articles FROM analyses WHERE ' +
+                        ' AND '.join(clauses) + ' ORDER BY date DESC LIMIT 30', params).fetchall()
     conn.close()
 
     historical = [{'date': r['date'], 'count': r['total_articles']} for r in rows]

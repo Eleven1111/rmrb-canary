@@ -126,7 +126,8 @@ def build_alerts(snapshot: dict, deadlines: list[dict] = None,
     created, updated, duplicates, skipped = [], [], [], 0
 
     for e in events:
-        if not (e.get('evidence_verified') and e.get('applies_to_topic')
+        if not (e.get('evidence_verified') and not e.get('needs_review')
+                and e.get('applies_to_topic')
                 and e.get('authority') == 'official' and e.get('tense') != 'historical'):
             skipped += 1
             continue
@@ -140,7 +141,9 @@ def build_alerts(snapshot: dict, deadlines: list[dict] = None,
         fp = event_fingerprint(topic_id, e)
         cv = change_version(e)
         record = {
-            'dedupe_key': f'{topic_id}|{fp}',
+            # 回放记录不能占用实时事件的去重键；否则历史补采会把之后的
+            # 实时发现错误地压成“重复”。
+            'dedupe_key': f"{'replay|' if is_replay else ''}{topic_id}|{fp}",
             'topic_id': topic_id,
             'topic_version': snapshot.get('topic_version'),
             'event_fingerprint': fp,
