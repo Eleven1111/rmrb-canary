@@ -45,7 +45,9 @@ def build_source_index(articles: list[dict]) -> dict:
     for a in articles or []:
         title = (a.get('title') or '').strip()
         content = a.get('content') or ''
-        blob = f'{title}\n{content}'
+        # 字符偏移由 scoping/evidence_of 相对于正文生成；标题仅作为索引键，
+        # 不能塞进被定位的字符串，否则所有偏移都会平移一个标题长度。
+        blob = content
         if title in index:
             index[title] = index[title] + '\n' + blob
         else:
@@ -82,7 +84,11 @@ def verify_event(event: dict, source_index: dict, doc_index: dict = None) -> dic
     # 省略号是本系统截断引文时加的，核验时按前缀匹配处理。
     probe = quote[:-3] if quote.endswith('...') else quote
 
-    haystack = source_index.get(title) or source_index.get('__ALL__', '')
+    # 标题是证据定位的一部分。找不到标题时搜索全库会让一条真实引文
+    # 被错误绑定到虚构文章，报告也无法带读者回到正确来源。
+    haystack = source_index.get(title, '') if title else source_index.get('__ALL__', '')
+    if title and title not in source_index:
+        failures.append(f'证据标题不存在于原始来源：{title}')
     if probe and probe not in haystack:
         failures.append(f'引文在原文中不存在（标题：{title or "未给出"}）')
 
@@ -138,8 +144,13 @@ def verify_event(event: dict, source_index: dict, doc_index: dict = None) -> dic
                 failures.append(f'分句中的{label}「{m.group()}」未出现在引文中')
 
     start, end = evidence.get('char_start'), evidence.get('char_end')
-    if isinstance(start, int) and isinstance(end, int) and end <= start:
-        failures.append(f'字符位置无效：char_start={start} >= char_end={end}')
+    if isinstance(start, int) and isinstance(end, int):
+        if end <= start:
+            failures.append(f'字符位置无效：char_start={start} >= char_end={end}')
+        # 旧导入数据可能没有标题/文档 ID；此时只能核验引文存在，不能把
+        # 多篇无标题文章拼接后的偏移假装成可定位坐标。
+        elif title and (start < 0 or end > len(haystack) or haystack[start:end] != probe):
+            failures.append('字符位置没有定位到该引文')
 
     return {'verified': not failures, 'failures': failures, 'checked': checked}
 
@@ -153,7 +164,9 @@ def verify_events(events: list[dict], articles: list[dict],
       {status, events（已回填核验结果）, verified_count, unsupported_count,
        evidence_completeness, unsupported_samples, note}
     """
-    index = build_source_index(articles)
+    # 正式文件也是原始证据；统一进入索引后，分句引文才能被定位到其文件，
+    # 而不是错误地只在人民日报文章中搜索。
+    index = build_source_index((articles or []) + (documents or []))
     doc_index = build_document_index(documents)
     out = []
     verified_count = 0

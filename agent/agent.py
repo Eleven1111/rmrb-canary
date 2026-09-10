@@ -41,7 +41,11 @@ from agent.store.db import log_run, save_analysis_detailed
 from agent.store import ledger, judgments, dossier
 
 # ── P0–P3 合并引入的事件层 ─────────────────────────────────
-from agent.topics import resolve_topic
+from agent.topics import resolve_topic, load_enterprise, enterprise_exposure, list_topics
+from agent.snapshot import build_snapshot
+from agent.sources.gov_cn_pages import fetch_documents
+from agent.store.doccache import DocumentCache
+from agent.store.db import load_previous_snapshot
 from agent.tools.scoping import build_target_segments
 from agent.tools.event_extract import extract_events
 from agent.tools.evidence_check import verify_events
@@ -52,7 +56,7 @@ from agent.tools.alerts import build_alerts
 
 
 def run_pipeline(
-    keywords: list[str],
+    keywords: list[str] = None,
     date: str = None,
     skip_media: bool = False,
     skip_sources: bool = False,
@@ -60,6 +64,10 @@ def run_pipeline(
     topic_key: str = None,
     as_of: str = None,
     skip_events: bool = False,
+    enterprise_key: str = None,
+    dry_run: bool = False,
+    skip_documents: bool = False,
+    no_cache: bool = False,
 ) -> dict:
     """
     执行完整分析管道，返回结构化结果 dict。
@@ -79,11 +87,18 @@ def run_pipeline(
     与原有的 intensity/ministry/risk_window 并列，**不互相替代**：
     前者回答"哪个主体对哪个对象做了什么、证据在哪"，后者是词面强度特征。
     """
+    topic = resolve_topic(topic_key=topic_key, keywords=keywords)
+    keywords = topic['search_terms']
+    enterprise = load_enterprise(enterprise_key) if enterprise_key else None
+    exposure = enterprise_exposure(enterprise, topic.get('topic_key'))
+    # dry-run 的定义是“只读分析”：缓存命中可改变采集分支，写缓存则会
+    # 让本次演练影响之后的历史回放，因此同时关闭缓存读写。
+    cache = DocumentCache(enabled=not (no_cache or dry_run))
     result = {'keywords': keywords, 'date_requested': date}
 
     # ── 1. 采集人民日报 ────────────────────────────────────
     print('[1/12] 采集人民日报...', file=sys.stderr)
-    summary = fetch_rmrb(keywords=keywords, date=date)
+    summary = fetch_rmrb(keywords=keywords, date=date, cache=cache, as_of=as_of)
     analysis_date = summary.get('date', '')
     all_texts = summary.get('full_texts', [])
 
@@ -117,7 +132,6 @@ def run_pipeline(
 
     # 主题身份要在入库之前定下来：storage / rolling / silence 都以 topic_id 为准，
     # 拿不到它就只能退回关键词匹配，那正是 F10 要消除的东西。
-    topic = resolve_topic(topic_key=topic_key, keywords=keywords)
     effective_as_of = as_of or analysis_date
     result['topic'] = {'topic_id': topic['topic_id'],
                        'topic_key': topic.get('topic_key'),
@@ -137,8 +151,8 @@ def run_pipeline(
     print('[7/12] 共现语境分析...', file=sys.stderr)
     result['cooccurrence'] = analyze_cooccurrence(kept, keywords)
 
-    # ── 8. 政策时钟 + 风险窗口（回测校准+频率陈述）──────────
-    print('[8/12] 政策时钟 + 风险窗口（回测校准）...', file=sys.stderr)
+    # ── 8. 政策时钟（观察特征；不输出风险倒计时）────────────
+    print('[8/12] 政策时钟（观察特征，不输出风险倒计时）...', file=sys.stderr)
     result['clock'] = get_policy_clock(analysis_date or None)
     result['risk_window'] = calculate_risk_window(
         intensity_level=result['intensity']['weighted_max_level'],
@@ -149,7 +163,7 @@ def run_pipeline(
     )
 
     # ── 9. 传导链定位（上游信号源）──────────────────────────
-    if not skip_sources:
+    if not skip_sources and not as_of:
         print('[9/12] 上游信号源 + 传导链定位...', file=sys.stderr)
         try:
             upstream = collect_upstream(keywords)
@@ -184,7 +198,10 @@ def run_pipeline(
             print(f'  [跳过] 传导链定位失败: {e}', file=sys.stderr)
             result['transmission'] = {'stage': '未运行', 'error': str(e)}
     else:
-        result['transmission'] = {'stage': '未运行', 'note': '--skip-sources'}
+        result['transmission'] = {
+            'stage': '未运行',
+            'note': ('历史回放不采集无 as_of 的上游来源' if as_of else '--skip-sources'),
+        }
 
     # ── 9.5. 交叉验证（可选）──────────────────────────────
     if not skip_media:
@@ -197,37 +214,12 @@ def run_pipeline(
             print(f'  [跳过] 交叉验证失败: {e}', file=sys.stderr)
             result['cross_validation'] = {'error': str(e)}
 
-    # ── 10. 历史对比 + 存储 + 滚动平滑 ─────────────────────
-    print('[10/12] 历史对比 + 存储 + 滚动平滑...', file=sys.stderr)
-    result['trend'] = compare_history(result, keywords)
-    stored = save_analysis_detailed(result)
-    result['storage'] = {'analysis_id': stored['analysis_id'], 'saved': True,
-                         'action': stored['action'],
-                         'topic_id': stored['topic_id'],
-                         'algo_version': stored['algo_version']}
-    log_run(topic_id=stored['topic_id'], date=analysis_date,
-            as_of=effective_as_of,
-            quality_status=(result.get('fetch_quality') or {}).get('status'),
-            outcome=stored['action'],
-            topic_version=stored['topic_version'])
-    result['rolling'] = rolling_verdict(
-        keywords, end_date=analysis_date or None, window_days=window_days,
-        topic_id=topic['topic_id'],
-    )
+    # ── 10. 正式文件与事件层：先收集全部证据，再生成结论 ───────
+    policy_documents = {'status': 'skipped', 'documents': [], 'matched_count': 0}
+    if not skip_documents:
+        policy_documents = fetch_documents(keywords, as_of=as_of, cache=cache)
 
-    # ── 11. 沉默检测 + 趋势 + 提法追踪 ─────────────────────
-    print('[11/12] 沉默检测 + 提法追踪...', file=sys.stderr)
-    result['silence'] = detect_silence(
-        keywords=keywords,
-        current_date=analysis_date,
-        current_count=len(kept),
-        topic_id=topic['topic_id'],
-    )
-    result['rolling_trend'] = rolling_trend(
-        keywords, as_of=effective_as_of, topic_id=topic['topic_id'])
-    result['formulation'] = track_formulations(kept, analysis_date)
-
-    # ── 11.5 事件层：抽取 → 证据核验 → 多维信号 → 变化 → 告警 ──
+    # ── 11. 事件层：抽取 → 核验 → 多维信号 ─────────────────
     if not skip_events:
         print('[11.5/12] 事件抽取 + 证据核验 + 多维信号...', file=sys.stderr)
         # topic / effective_as_of 已在步骤 3 之后解析，这里直接复用 ——
@@ -237,8 +229,17 @@ def run_pipeline(
         scope = build_target_segments(kept, terms,
                                       exclude_terms=topic.get('exclude_terms'))
         raw_events = extract_events(scope, terms, source_layer='report')
-        extraction = verify_events(raw_events.get('events', []), kept)
-        extraction['counts'] = raw_events.get('counts', {})
+        document_rows = policy_documents.get('documents') or []
+        document_scope = build_target_segments(document_rows, terms,
+                                               exclude_terms=topic.get('exclude_terms'))
+        document_events = extract_events(
+            document_scope, terms, source_layer='official_document',
+            default_subjects={d.get('title'): d.get('issuing_agency') for d in document_rows
+                              if d.get('title') and d.get('issuing_agency')})
+        extraction = verify_events(raw_events.get('events', []) + document_events.get('events', []),
+                                   kept + document_rows, documents=document_rows)
+        extraction['counts'] = {'report': raw_events.get('counts', {}),
+                                'official_document': document_events.get('counts', {})}
 
         dedupe_res = merge_sources(kept, [])
         signals = build_signals(extraction, agenda=summary.get('step1_agenda'),
@@ -251,36 +252,58 @@ def run_pipeline(
         result['signals'] = signals
         result['dedupe'] = dedupe_res
 
-        event_snapshot = {
-            'topic_id': topic['topic_id'],
-            'topic_version': topic.get('topic_version'),
-            'topic_label': topic.get('label'),
-            'date': analysis_date,
-            'as_of': effective_as_of,
-            'events': result['events'],
-            'signals': signals,
-        }
-        result['changes'] = detect_changes(event_snapshot, None)
-        result['alerts'] = build_alerts(event_snapshot)
         result['event_layer_note'] = (
             '事件层与词面强度层并列呈现，不互相替代。'
             'needs_review 的事件不得直接写进结论。')
 
-    # ── 12. 预测台账 + 议题档案 ────────────────────────────
-    print('[12/12] 预测台账 + 议题档案...', file=sys.stderr)
-    due = ledger.check_due_predictions(keywords)
-    prediction_id = ledger.record_prediction(stored['analysis_id'], result)
-    result['prediction'] = {
-        'prediction_id': prediction_id,
-        'due_review': due,
-        'ledger_stats': ledger.ledger_stats(),
-    }
-    if due:
-        print(f'  ⏰ {len(due)} 条预测窗口已到期待复盘', file=sys.stderr)
-
-    result['dossier_context'] = dossier.dossier_context(keywords)
-    dossier_file = dossier.update_dossier(result)
-    result['dossier_path'] = dossier_file
+    # ── 12. 唯一快照 → 历史比较 → 保存（dry-run 绝不写） ──────
+    quality = summary.get('fetch_quality') or {'status': 'unknown',
+        'total_scanned_articles': None, 'silence_conclusion_allowed': False}
+    snapshot_summary = {**summary, 'total_articles': len(kept), 'fetch_quality': quality}
+    snapshot = build_snapshot(
+        topic=topic, summary=snapshot_summary, scope=result.get('scope', {}),
+        narrative=result['narrative'], intensity=result['intensity'], ministry=result['ministry'],
+        cooccurrence=result['cooccurrence'], clock=result['clock'],
+        timing={'evidence_state': '⚪ 未标定，不给预测窗口'},
+        extraction={'events': result.get('events', []), **result.get('extraction', {})},
+        signals=result.get('signals'), dedupe=result.get('dedupe'), enterprise=enterprise,
+        exposure=exposure, cross_validation=result.get('cross_validation'), as_of=effective_as_of,
+        policy_documents=policy_documents, cache_report=cache.report())
+    snapshot.update({'rmrb': result['rmrb'], 'relevance': result['relevance'],
+                     'transmission': result['transmission'], 'topic': result['topic'],
+                     'full_texts': kept, 'risk_window': {'status': 'unknown',
+                     'adjusted_window_label': '不适用（未标定）', 'risk_emoji': '⚪'}})
+    previous = load_previous_snapshot(topic['topic_id'], topic.get('topic_version'), analysis_date)
+    previous_complete = (previous or {}).get('fetch_quality', {}).get('status') == 'complete'
+    snapshot['changes'] = detect_changes(
+        snapshot, previous,
+        comparable=previous is not None and previous_complete and quality.get('status') == 'complete',
+    )
+    snapshot['alerts'] = ({'status': 'skipped', 'reason': '--dry-run'} if dry_run
+                          else build_alerts(snapshot))
+    snapshot['trend'] = compare_history(snapshot, keywords)
+    snapshot['silence'] = detect_silence(keywords, analysis_date, len(kept), topic['topic_id'],
+        topic.get('topic_version'), quality_complete=quality.get('status') == 'complete')
+    snapshot['rolling_trend'] = rolling_trend(keywords, as_of=effective_as_of, topic_id=topic['topic_id'])
+    snapshot['formulation'] = (
+        {'status': 'skipped', 'reason': '--dry-run 不写入提法生命周期库'}
+        if dry_run else track_formulations(kept, analysis_date)
+    )
+    snapshot['dossier_context'] = dossier.dossier_context(keywords)
+    if dry_run:
+        snapshot['storage'] = {'saved': False, 'reason': '--dry-run'}
+        snapshot['dossier_path'] = None
+    else:
+        stored = save_analysis_detailed(snapshot)
+        snapshot['storage'] = {**stored, 'saved': True}
+        log_run(topic_id=stored['topic_id'], date=analysis_date, as_of=effective_as_of,
+                quality_status=quality.get('status'), outcome=stored['action'],
+                topic_version=stored['topic_version'])
+        snapshot['dossier_path'] = dossier.update_dossier(snapshot)
+    snapshot['rolling'] = rolling_verdict(keywords, end_date=analysis_date or None,
+                                           window_days=window_days, topic_id=topic['topic_id'])
+    snapshot['prediction'] = None
+    result = snapshot
 
     # ── 摘要 ─────────────────────────────────────────────
     rolling = result['rolling']
@@ -369,9 +392,17 @@ def main():
         """,
     )
     parser.add_argument('--keyword', nargs='+', help='关键词列表')
+    parser.add_argument('--topic', help='配置主题名')
+    parser.add_argument('--enterprise', help='企业画像名')
     parser.add_argument('--date', help='指定日期 YYYYMMDD，默认最新一期')
     parser.add_argument('--skip-media', action='store_true', help='跳过多源交叉验证')
     parser.add_argument('--skip-sources', action='store_true', help='跳过上游信号源/传导链')
+    parser.add_argument('--skip-documents', action='store_true', help='跳过正式政策文件采集')
+    parser.add_argument('--as-of', dest='as_of', help='分析截止时点 YYYYMMDD')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='只读演练：不写分析、告警、档案、提法或缓存')
+    parser.add_argument('--no-cache', action='store_true', help='禁用共享文档缓存')
+    parser.add_argument('--list-topics', action='store_true', help='列出可用主题')
     parser.add_argument('--window', type=int, default=7, help='滚动平滑窗口天数，默认 7')
     parser.add_argument('--compact', action='store_true', help='精简输出（去掉 full_texts）')
     parser.add_argument('--history', action='store_true', help='查看分析历史')
@@ -384,6 +415,10 @@ def main():
                         help='沉淀分析师判断（JSON 文件路径，- 为 stdin）')
 
     args = parser.parse_args()
+
+    if args.list_topics:
+        print(json.dumps({'topics': list_topics()}, ensure_ascii=False, indent=2))
+        return
 
     if args.history:
         records = get_history(limit=20)
@@ -402,7 +437,7 @@ def main():
         _cmd_record_judgment(args.record_judgment)
         return
 
-    if not args.keyword:
+    if not args.keyword and not args.topic:
         parser.print_help()
         return
 
@@ -412,6 +447,12 @@ def main():
         skip_media=args.skip_media,
         skip_sources=args.skip_sources,
         window_days=args.window,
+        topic_key=args.topic,
+        enterprise_key=args.enterprise,
+        as_of=args.as_of,
+        dry_run=args.dry_run,
+        skip_documents=args.skip_documents,
+        no_cache=args.no_cache,
     )
 
     if args.compact:

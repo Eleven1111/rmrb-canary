@@ -72,7 +72,7 @@ def fake_summary(date='20260611'):
 def patched_pipeline(monkeypatch):
     monkeypatch.setattr(
         agent_mod, 'fetch_rmrb',
-        lambda keywords, date=None: fake_summary(date or '20260611'),
+        lambda keywords, date=None, **_kwargs: fake_summary(date or '20260611'),
     )
     monkeypatch.setattr(agent_mod, 'collect_upstream', lambda keywords, days=180: {
         'central_docs': {'items': [
@@ -87,6 +87,9 @@ def patched_pipeline(monkeypatch):
     })
     monkeypatch.setattr(agent_mod, 'fetch_media_sources',
                         lambda keywords, rmrb_summary=None: {'mocked': True})
+    monkeypatch.setattr(agent_mod, 'fetch_documents', lambda *args, **kwargs: {
+        'status': 'ok', 'documents': [], 'matched_count': 0,
+    })
     return agent_mod
 
 
@@ -108,13 +111,12 @@ class TestPipelineIntegration:
         # 传导链：中央文件 + 部委联合发文 + 日报火力 = 动员期
         assert result['transmission']['stage'] == '动员期'
 
-        # 风险窗口带校准依据和频率陈述
-        assert result['risk_window']['base_window_basis']['source'] == 'backtest'
-        assert result['risk_window']['frequency'] is not None
+        # 未经标定时不得把规则乘法包装成风险倒计时或预测频率。
+        assert result['risk_window']['status'] == 'unknown'
 
-        # 入库 + 预测台账 + 档案
+        # 入库 + 档案；风险预测台账已被废弃。
         assert result['storage']['saved']
-        assert result['prediction']['prediction_id'] is not None
+        assert result['prediction'] is None
         assert result['dossier_path']
         assert '动员期' in open(result['dossier_path'], encoding='utf-8').read()
 
@@ -136,6 +138,25 @@ class TestPipelineIntegration:
         )
         assert result['transmission']['stage'] == '未运行'
         assert result['storage']['saved']
+
+    def test_dry_run_does_not_call_state_writers(self, patched_pipeline, monkeypatch):
+        forbidden = []
+
+        def mark(name):
+            return lambda *args, **kwargs: forbidden.append(name)
+
+        monkeypatch.setattr(patched_pipeline, 'track_formulations', mark('formulations'))
+        monkeypatch.setattr(patched_pipeline, 'build_alerts', mark('alerts'))
+        monkeypatch.setattr(patched_pipeline, 'save_analysis_detailed', mark('analysis'))
+        monkeypatch.setattr(patched_pipeline.dossier, 'update_dossier', mark('dossier'))
+
+        result = patched_pipeline.run_pipeline(
+            ['光伏'], skip_media=True, skip_sources=True, dry_run=True,
+        )
+
+        assert result['storage']['saved'] is False
+        assert result['formulation']['status'] == 'skipped'
+        assert forbidden == []
 
     def test_record_judgment_roundtrip(self, patched_pipeline, tmp_path):
         result = patched_pipeline.run_pipeline(['光伏'], skip_media=True)

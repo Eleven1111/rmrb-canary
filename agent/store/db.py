@@ -432,14 +432,17 @@ def get_topic_series(topic_id: str, as_of: str, limit: int = 90,
     if topic_version is not None:
         query += ' AND topic_version = ?'
         params.append(topic_version)
-    query += ' ORDER BY date ASC LIMIT ?'
+    # 先取得截至 as_of 的最近 N 期，再按时间升序交给趋势函数。直接 ASC LIMIT
+    # 会在长期运行后永远返回最早的 N 期。
+    query += ' ORDER BY date DESC LIMIT ?'
     params.append(limit)
     rows = conn.execute(query, params).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in reversed(rows)]
 
 
-def get_previous_analysis(keywords, current_date=None, topic_id=None):
+def get_previous_analysis(keywords, current_date=None, topic_id=None,
+                          topic_version=None, algo_version=ALGO_VERSION):
     """
     查找同一主题的上一次分析，返回 dict 或 None。
 
@@ -451,14 +454,28 @@ def get_previous_analysis(keywords, current_date=None, topic_id=None):
     conn = get_conn()
     tid = topic_id or make_topic_id(keywords)
 
-    query = "SELECT * FROM analyses WHERE topic_id = ?"
-    params = [tid]
+    query = "SELECT * FROM analyses WHERE topic_id = ? AND algo_version = ?"
+    params = [tid, algo_version]
+    if topic_version is not None:
+        query += ' AND topic_version = ?'
+        params.append(topic_version)
     if current_date:
         query += " AND date < ?"
         params.append(current_date)
     query += " ORDER BY date DESC LIMIT 1"
 
     row = conn.execute(query, params).fetchone()
+
+    # 旧版记录不能参与新版自动趋势，但用于一次性迁移诊断时可返回，并由
+    # compare_with_previous 标为不可比。这不是把它混回新版时间线。
+    if not row and topic_version is None and algo_version == ALGO_VERSION:
+        legacy_query = 'SELECT * FROM analyses WHERE topic_id = ?'
+        legacy_params = [tid]
+        if current_date:
+            legacy_query += ' AND date < ?'
+            legacy_params.append(current_date)
+        legacy_query += ' ORDER BY date DESC LIMIT 1'
+        row = conn.execute(legacy_query, legacy_params).fetchone()
 
     if not row:
         conn.close()
@@ -471,7 +488,8 @@ def get_previous_analysis(keywords, current_date=None, topic_id=None):
     conn.close()
 
     row_d = dict(row)
-    effective_intensity = row_d.get('weighted_max_intensity') or row_d.get('max_intensity', 0)
+    weighted = row_d.get('weighted_max_intensity')
+    effective_intensity = weighted if weighted is not None else row_d.get('max_intensity', 0)
     return {
         'id': row_d['id'],
         'date': row_d['date'],
@@ -495,6 +513,25 @@ def get_previous_analysis(keywords, current_date=None, topic_id=None):
             for s in snapshots
         },
     }
+
+
+def load_previous_snapshot(topic_id: str, topic_version: str, date: str,
+                           algo_version: str = ALGO_VERSION) -> dict | None:
+    """返回同一主题、同一口径且严格早于 date 的完整上一期快照。"""
+    conn = get_conn()
+    row = conn.execute(
+        'SELECT report_json FROM analyses WHERE topic_id = ? AND topic_version = ? '
+        'AND algo_version = ? AND date < ? ORDER BY date DESC LIMIT 1',
+        (topic_id, topic_version, algo_version, date),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    try:
+        snapshot = json.loads(row['report_json'])
+    except (TypeError, ValueError):
+        return None
+    return snapshot if isinstance(snapshot, dict) else None
 
 
 def compare_with_previous(current: dict, keywords: list) -> dict | None:
